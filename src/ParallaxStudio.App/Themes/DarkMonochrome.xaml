@@ -1,0 +1,30 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Color x:Key="WindowColor">#08090B</Color>
+    <Color x:Key="SurfaceColor">#101216</Color>
+    <Color x:Key="SurfaceRaisedColor">#171A20</Color>
+    <Color x:Key="SurfaceHoverColor">#222630</Color>
+    <Color x:Key="BorderColor">#2D323C</Color>
+    <Color x:Key="BorderStrongColor">#545D6C</Color>
+    <Color x:Key="TextColor">#F4F6F8</Color>
+    <Color x:Key="TextSecondaryColor">#B9C0CA</Color>
+    <Color x:Key="TextMutedColor">#7D8796</Color>
+    <Color x:Key="AccentColor">#DCE2EA</Color>
+    <Color x:Key="AccentSecondaryColor">#7B8DA8</Color>
+    <Color x:Key="AccentTextColor">#0B0D10</Color>
+    <Color x:Key="GlowColor">#33415A</Color>
+    <Color x:Key="DangerColor">#E06A72</Color>
+    <SolidColorBrush x:Key="WindowBrush" Color="{StaticResource WindowColor}" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource SurfaceColor}" />
+    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="{StaticResource SurfaceRaisedColor}" />
+    <SolidColorBrush x:Key="SurfaceHoverBrush" Color="{StaticResource SurfaceHoverColor}" />
+    <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="{StaticResource BorderStrongColor}" />
+    <SolidColorBrush x:Key="TextBrush" Color="{StaticResource TextColor}" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}" />
+    <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMutedColor}" />
+    <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
+    <SolidColorBrush x:Key="AccentSecondaryBrush" Color="{StaticResource AccentSecondaryColor}" />
+    <SolidColorBrush x:Key="GlowBrush" Color="{StaticResource GlowColor}" />
+    <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
+    <SolidColorBrush x:Key="AccentTextBrush" Color="{StaticResource AccentTextColor}" />
+</ResourceDictionary>

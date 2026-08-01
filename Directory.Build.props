@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <DebugType>portable</DebugType>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Company>Mike Redd</Company>
+    <Authors>Mike Redd</Authors>
+    <Copyright>Mike Redd</Copyright>
+    <RepositoryUrl>https://github.com/MikereDD/It-Works-On-My-Machine</RepositoryUrl>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ParallaxStudio.Core", "src\ParallaxStudio.Core\ParallaxStudio.Core.csproj", "{9179285E-13E4-4AC4-91DA-2C5D72B5125A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ParallaxStudio.Infrastructure", "src\ParallaxStudio.Infrastructure\ParallaxStudio.Infrastructure.csproj", "{21BD679B-EBD4-44ED-A571-646A975886E7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ParallaxStudio.App", "src\ParallaxStudio.App\ParallaxStudio.App.csproj", "{2AF7DA61-5E06-4590-89F4-5E01E789B1E8}"
+EndProject
+Global
+  GlobalSection(SolutionConfigurationPlatforms) = preSolution
+    Debug|Any CPU = Debug|Any CPU
+    Release|Any CPU = Release|Any CPU
+  EndGlobalSection
+  GlobalSection(ProjectConfigurationPlatforms) = postSolution
+    {9179285E-13E4-4AC4-91DA-2C5D72B5125A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {9179285E-13E4-4AC4-91DA-2C5D72B5125A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {9179285E-13E4-4AC4-91DA-2C5D72B5125A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {9179285E-13E4-4AC4-91DA-2C5D72B5125A}.Release|Any CPU.Build.0 = Release|Any CPU
+    {21BD679B-EBD4-44ED-A571-646A975886E7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {21BD679B-EBD4-44ED-A571-646A975886E7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {21BD679B-EBD4-44ED-A571-646A975886E7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {21BD679B-EBD4-44ED-A571-646A975886E7}.Release|Any CPU.Build.0 = Release|Any CPU
+    {2AF7DA61-5E06-4590-89F4-5E01E789B1E8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {2AF7DA61-5E06-4590-89F4-5E01E789B1E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {2AF7DA61-5E06-4590-89F4-5E01E789B1E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {2AF7DA61-5E06-4590-89F4-5E01E789B1E8}.Release|Any CPU.Build.0 = Release|Any CPU
+  EndGlobalSection
+EndGlobal

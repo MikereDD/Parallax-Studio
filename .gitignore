@@ -1,0 +1,13 @@
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+bin/
+obj/
+artifacts/
+publish/
+*.log
+native/*.dll
+!native/README.md
