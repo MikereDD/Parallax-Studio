@@ -1,18 +1,23 @@
 # Native runtime files
 
-Place the 64-bit mpv development runtime here:
+`libmpv-2.dll` is required for playback and intentionally excluded from Git.
 
-```text
-libmpv-2.dll
+Install the pinned x64-v3 build automatically:
+
+```powershell
+.\scripts\Get-NativeDependencies.ps1
 ```
 
-During build, DLL files in this folder are copied beside `ParallaxStudio.App.exe`.
-Native DLLs are intentionally ignored by Git.
+If 7-Zip is not installed:
 
-Optional future disc decryption dependencies may also be placed here when legally
-and technically appropriate:
+```powershell
+.\scripts\Get-NativeDependencies.ps1 -InstallTools
+```
 
-- `libdvdcss.dll`
-- `libaacs.dll`
+Or bootstrap while building:
 
-Parallax Studio does not distribute those libraries or disc keys.
+```powershell
+.\build.ps1 -Bootstrap -Run
+```
+
+`libdvdcss-2.dll` and `libaacs.dll` remain optional, user-supplied disc libraries until the disc-distribution policy is finalized.

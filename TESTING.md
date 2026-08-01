@@ -1,19 +1,27 @@
-# Parallax Studio v1.0-dev.4.1 Test Checklist
+# Parallax Studio v1.0-dev.4.2.3 Test
 
-## Setup
+From a fresh extraction, leave `native\` without `libmpv-2.dll`, then run:
 
-1. Copy the x64 `libmpv-2.dll` into `native\`.
-2. Run `./build.ps1 -Run`.
-3. Open an MKV with multiple audio tracks, subtitles, and chapters.
+```powershell
+.\build.ps1 -Bootstrap -InstallBootstrapTools -Run
+```
 
-## Test
+Expected stages:
 
-- Open **Tracks** and confirm the panel appears.
-- Audio tab: verify all audio streams appear and switch between at least two.
-- Subtitles tab: switch embedded subtitles, choose **Subtitles Off**, then turn subtitles back on.
-- Load an external `.srt` or `.ass` file.
-- Adjust subtitle delay backward and forward.
-- Chapters tab: select a chapter and test Previous/Next chapter.
-- Verify video, seeking, volume, mute, fullscreen, drag-and-drop, and clean app exit still work.
+1. `Parallax Studio build script started.`
+2. `Bootstrapping native dependencies...`
+3. `Using 7-Zip: C:\Program Files\7-Zip\7z.exe`
+4. Download or cached-archive message
+5. Extraction and DLL installation
+6. Native dependency verification
+7. Normal .NET build and app launch
 
-Report compile errors, missing track metadata, incorrect selection state, crashes, or audio continuing after close.
+Verify afterward:
+
+```powershell
+Test-Path .\native\libmpv-2.dll
+Test-Path .\native-dependencies.lock.json
+Get-Content .\native\bootstrap.log -Tail 100
+```
+
+The first two commands should return `True`.

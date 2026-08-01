@@ -11,3 +11,4 @@ publish/
 *.log
 native/*.dll
 !native/README.md
+native/.downloads/

@@ -156,3 +156,20 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for design boundaries and
 ## v1.0-dev.4 test focus
 
 This build introduces live audio-track switching, embedded and external subtitles, subtitle delay, and chapter navigation through the new Tracks panel.
+
+## Native dependency bootstrap
+
+Parallax Studio pins its required libmpv package in `native-dependencies.json`. Normal builds remain offline and never download files unexpectedly.
+
+```powershell
+.\scripts\Get-NativeDependencies.ps1
+.\build.ps1 -Run
+```
+
+A one-command explicit bootstrap is also available:
+
+```powershell
+.\build.ps1 -Bootstrap -Run
+```
+
+The first successful bootstrap writes `native-dependencies.lock.json` containing the resolved archive and DLL SHA-256 values. Future verification uses that lock file. Optional disc libraries remain user-supplied.
