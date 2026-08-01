@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0-dev.4.3
+
+- Replaced native light WPF selectors with a complete Studio-themed ComboBox.
+- Added premium themed tabs, list items, scrollbars, selected states, hover states, and disabled states.
+- Removed white fallback surfaces from the Tracks, Subtitles, and Chapters panel.
+- Added readable empty states for media without alternate tracks, subtitles, or chapters.
+- Increased the media panel width and improved spacing and contrast across all current themes.
+- Preserved the validated native libmpv bootstrap and dev.4 playback features.
+
 ## v1.0-dev.4.2.3
 
 - Simplified native dependency bootstrap to run directly from `build.ps1`.
