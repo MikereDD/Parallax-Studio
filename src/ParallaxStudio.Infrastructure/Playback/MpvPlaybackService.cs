@@ -114,6 +114,34 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         await logger.InfoAsync($"Opened media: {fullPath}", cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task OpenBluRayAsync(DiscSource disc, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(disc);
+        if (disc.Kind != DiscKind.BluRay)
+            throw new InvalidOperationException("The selected optical source is not a Blu-ray disc.");
+        if (!disc.IsReady)
+            throw new InvalidOperationException("The Blu-ray drive is not ready.");
+
+        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        await WithInitializedContextAsync(context =>
+        {
+            SetSnapshot(Snapshot with
+            {
+                State = PlaybackState.Loading,
+                Source = $"Blu-ray disc • {device}",
+                Title = CleanDiscTitle(disc.DisplayName, device),
+                Position = TimeSpan.Zero,
+                Duration = TimeSpan.Zero
+            });
+
+            _library.SetProperty(context, "bluray-device", device);
+            _library.Command(context, "loadfile", "bd://longest", "replace");
+            _paused = false;
+        }, cancellationToken).ConfigureAwait(false);
+
+        await logger.InfoAsync($"Opened Blu-ray main feature from {device}.", cancellationToken).ConfigureAwait(false);
+    }
+
     public Task TogglePauseAsync(CancellationToken cancellationToken = default) =>
         WithInitializedContextAsync(context =>
         {
@@ -317,6 +345,12 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         }
     }
 
+
+    private static string CleanDiscTitle(string displayName, string driveRoot)
+    {
+        var title = displayName.Replace(driveRoot, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+        return string.IsNullOrWhiteSpace(title) ? "Blu-ray Disc" : title;
+    }
 
     private static int ParseInt(string? value, int fallback = 0) =>
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) ? result : fallback;

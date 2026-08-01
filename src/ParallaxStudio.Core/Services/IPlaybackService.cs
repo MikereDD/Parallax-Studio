@@ -14,6 +14,7 @@ public interface IPlaybackService : IAsyncDisposable
     Task<PlaybackBackendStatus> ProbeAsync(CancellationToken cancellationToken = default);
     Task InitializeAsync(nint windowHandle, CancellationToken cancellationToken = default);
     Task OpenFileAsync(string path, CancellationToken cancellationToken = default);
+    Task OpenBluRayAsync(DiscSource disc, CancellationToken cancellationToken = default);
     Task TogglePauseAsync(CancellationToken cancellationToken = default);
     Task StopAsync(CancellationToken cancellationToken = default);
     Task SeekRelativeAsync(double seconds, CancellationToken cancellationToken = default);

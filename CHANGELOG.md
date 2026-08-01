@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0-dev.5
+
+- Added first Blu-ray disc playback foundation.
+- Added a Play Blu-ray action for detected ready Blu-ray drives.
+- Configures libmpv `bluray-device` and opens `bd://longest` for direct main-feature testing.
+- Reuses track, subtitle, chapter, timeline, volume, fullscreen, and clean-shutdown systems during disc playback.
+- Adds explicit protected-disc/AACS diagnostic messaging without downloading decryption keys.
+
 ## v1.0-dev.4.3
 
 - Replaced native light WPF selectors with a complete Studio-themed ComboBox.

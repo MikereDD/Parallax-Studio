@@ -173,3 +173,8 @@ A one-command explicit bootstrap is also available:
 ```
 
 The first successful bootstrap writes `native-dependencies.lock.json` containing the resolved archive and DLL SHA-256 values. Future verification uses that lock file. Optional disc libraries remain user-supplied.
+
+
+## Blu-ray foundation
+
+Insert a Blu-ray, select **Scan**, then **Play Blu-ray**. This first slice uses libmpv/libbluray direct main-feature playback (`bd://longest`) and intentionally does not bundle or download AACS keys.

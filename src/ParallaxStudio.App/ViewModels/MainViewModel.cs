@@ -62,6 +62,7 @@ public sealed class MainViewModel : ObservableObject
 
         OpenCommand = new AsyncRelayCommand(OpenAsync);
         ScanDiscsCommand = new AsyncRelayCommand(ScanDiscsAsync);
+        PlayDiscCommand = new AsyncRelayCommand<DiscSource>(PlayDiscAsync, disc => disc is { IsReady: true, Kind: DiscKind.BluRay });
         PlayPauseCommand = new AsyncRelayCommand(PlayPauseAsync);
         StopCommand = new AsyncRelayCommand(StopAsync);
         SeekBackCommand = new AsyncRelayCommand(() => SeekAsync(-5));
@@ -89,6 +90,7 @@ public sealed class MainViewModel : ObservableObject
 
     public ICommand OpenCommand { get; }
     public ICommand ScanDiscsCommand { get; }
+    public ICommand PlayDiscCommand { get; }
     public ICommand PlayPauseCommand { get; }
     public ICommand StopCommand { get; }
     public ICommand SeekBackCommand { get; }
@@ -479,6 +481,26 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private async Task PlayDiscAsync(DiscSource? disc)
+    {
+        if (disc is null) return;
+        try
+        {
+            StatusText = $"Opening Blu-ray from {disc.DriveRoot}...";
+            IsTracksPanelOpen = false;
+            await _playback.OpenBluRayAsync(disc);
+            StatusText = "Blu-ray main feature is loading...";
+            await Task.Delay(1800);
+            await RefreshMediaNavigationAsync();
+            StatusText = "Blu-ray playback active. Use Tracks for audio, subtitles, and chapters.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = "Blu-ray could not be opened. The disc may require AACS keys or unsupported protection.";
+            await _logger.ErrorAsync($"Could not open Blu-ray from {disc.DriveRoot}", ex);
+        }
+    }
+
     private async Task ScanDiscsAsync()
     {
         try
@@ -488,7 +510,7 @@ public sealed class MainViewModel : ObservableObject
             foreach (var disc in discs) Discs.Add(disc);
             StatusText = discs.Count == 0
                 ? "No optical drives detected. File playback remains available."
-                : $"Found {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}. Disc playback arrives in a later slice.";
+                : $"Found {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}. Insert a Blu-ray and choose Play Disc.";
         }
         catch (Exception ex)
         {
