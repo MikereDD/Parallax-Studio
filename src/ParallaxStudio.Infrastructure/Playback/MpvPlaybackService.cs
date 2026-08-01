@@ -15,6 +15,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private Task? _pollTask;
     private bool _disposed;
     private bool _paused;
+    private string? _discDecryptionProvider;
 
     public event EventHandler<PlaybackStateChangedEventArgs>? StateChanged;
 
@@ -53,6 +54,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         try
         {
             if (IsInitialized) return;
+            ConfigureDiscDecryptionProvider();
             if (!_library.TryLoad(out var loadError))
             {
                 throw new FileNotFoundException(loadError, "libmpv-2.dll");
@@ -77,6 +79,8 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 SetSnapshot(Snapshot with { State = PlaybackState.Idle });
                 _pollTask = PollPlaybackAsync(_pollCancellation.Token);
                 await logger.InfoAsync($"Initialized {BackendDescription} from {_library.LoadedPath}.", cancellationToken)
+                    .ConfigureAwait(false);
+                await logger.InfoAsync($"Disc decryption provider: {_discDecryptionProvider ?? "plain libaacs/libbdplus fallback"}.", cancellationToken)
                     .ConfigureAwait(false);
             }
             catch
@@ -414,6 +418,77 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     }
 
 
+    private void ConfigureDiscDecryptionProvider()
+    {
+        if (!string.IsNullOrWhiteSpace(_discDecryptionProvider))
+            return;
+
+        var candidates = new List<string>();
+        var configured = Environment.GetEnvironmentVariable("PARALLAX_STUDIO_LIBMMBD");
+        if (!string.IsNullOrWhiteSpace(configured))
+            candidates.Add(configured);
+
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        if (!string.IsNullOrWhiteSpace(programFilesX86))
+            candidates.Add(Path.Combine(programFilesX86, "MakeMKV", "libmmbd64.dll"));
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        if (!string.IsNullOrWhiteSpace(programFiles))
+            candidates.Add(Path.Combine(programFiles, "MakeMKV", "libmmbd64.dll"));
+
+        var libMmbd = candidates
+            .Select(Path.GetFullPath)
+            .FirstOrDefault(File.Exists);
+
+        if (libMmbd is null)
+        {
+            _discDecryptionProvider = "plain libaacs/libbdplus fallback";
+            return;
+        }
+
+        Environment.SetEnvironmentVariable("LIBAACS_PATH", libMmbd, EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable("LIBBDPLUS_PATH", libMmbd, EnvironmentVariableTarget.Process);
+
+        var runtimeDirectory = AppContext.BaseDirectory;
+        var runtimeAacs = Path.Combine(runtimeDirectory, "libaacs.dll");
+        var runtimeBdPlus = Path.Combine(runtimeDirectory, "libbdplus.dll");
+        var aliasesStaged = FilesMatch(libMmbd, runtimeAacs) && FilesMatch(libMmbd, runtimeBdPlus);
+        _discDecryptionProvider = aliasesStaged
+            ? $"MakeMKV LibMMBD active via staged libaacs.dll/libbdplus.dll ({libMmbd})"
+            : $"MakeMKV LibMMBD detected but runtime aliases are not staged ({libMmbd})";
+    }
+
+    private static bool FilesMatch(string left, string right)
+    {
+        try
+        {
+            if (!File.Exists(left) || !File.Exists(right)) return false;
+            var leftInfo = new FileInfo(left);
+            var rightInfo = new FileInfo(right);
+            if (leftInfo.Length != rightInfo.Length) return false;
+            return File.ReadAllBytes(left).AsSpan().SequenceEqual(File.ReadAllBytes(right));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool IsMakeMkvLibMmbdAvailable()
+    {
+        ConfigureDiscDecryptionProvider();
+        return _discDecryptionProvider?.StartsWith("MakeMKV LibMMBD", StringComparison.Ordinal) == true;
+    }
+
+    public string DiscDecryptionProvider
+    {
+        get
+        {
+            ConfigureDiscDecryptionProvider();
+            return _discDecryptionProvider ?? "plain libaacs/libbdplus fallback";
+        }
+    }
+
     private async Task LogNativeDiscLibrariesAsync(CancellationToken cancellationToken)
     {
         var baseDirectory = AppContext.BaseDirectory;
@@ -426,6 +501,8 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 
         var keyDb = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "aacs", "KEYDB.cfg");
         await logger.InfoAsync($"AACS key database: {(File.Exists(keyDb) ? keyDb : "not present")}", cancellationToken)
+            .ConfigureAwait(false);
+        await logger.InfoAsync($"Disc decryption provider: {DiscDecryptionProvider}", cancellationToken)
             .ConfigureAwait(false);
     }
 

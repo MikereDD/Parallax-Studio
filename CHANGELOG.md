@@ -1,3 +1,10 @@
+## 1.0-dev.5.2.1
+
+- Automatically stages MakeMKV `libmmbd64.dll` as runtime `libaacs.dll` and `libbdplus.dll` after each successful build.
+- Preserves the standard bootstrap libraries as `libaacs.standard.dll` and `libbdplus.standard.dll` in build output.
+- Verifies all staged provider files with SHA-256 before launch.
+- Reports whether LibMMBD runtime aliases are actually active instead of merely detected.
+
 # Changelog
 
 ## v1.0-dev.5.1.2

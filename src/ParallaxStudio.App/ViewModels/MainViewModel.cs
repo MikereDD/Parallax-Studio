@@ -583,6 +583,12 @@ public sealed class MainViewModel : ObservableObject
 
     private bool EnsureAacsConfigurationReady()
     {
+        if (_playback.IsMakeMkvLibMmbdAvailable())
+        {
+            StatusText = $"Protected Blu-ray provider ready: {_playback.DiscDecryptionProvider}.";
+            return true;
+        }
+
         var keyDb = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "aacs",
