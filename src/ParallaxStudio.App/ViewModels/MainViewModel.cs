@@ -44,6 +44,7 @@ public sealed class MainViewModel : ObservableObject
     private string _mediaDetailsText = "No media metadata loaded";
     private bool _isBluRayPanelOpen;
     private DiscSource? _activeBluRayDisc;
+    private bool _isRefreshingMediaNavigation;
 
     public MainViewModel(
         IPlaybackService playback,
@@ -91,6 +92,7 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<MediaTrack> SubtitleTracks { get; } = [];
     public ObservableCollection<MediaChapter> Chapters { get; } = [];
     public ObservableCollection<BluRayTitle> BluRayTitles { get; } = [];
+    public bool IsRefreshingMediaNavigation => _isRefreshingMediaNavigation;
     public IReadOnlyList<string> ThemeNames => StudioAppearanceService.Themes;
     public IReadOnlyList<string> TypographyNames => StudioAppearanceService.TypographyProfiles;
 
@@ -349,8 +351,7 @@ public sealed class MainViewModel : ObservableObject
             StatusText = $"Opening {Path.GetFileName(path)}...";
             await _playback.OpenFileAsync(path);
             StatusText = "Playback active. Reading tracks, subtitles, and chapters...";
-            await Task.Delay(650);
-            await RefreshMediaNavigationAsync();
+            await RefreshMediaNavigationWithRetryAsync(10, 300);
             StatusText = "Playback active. Tracks, subtitles, and chapters are ready.";
         }
         catch (Exception ex)
@@ -419,21 +420,29 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private async Task RefreshMediaNavigationAsync()
+    private async Task<bool> RefreshMediaNavigationAsync()
     {
         var tracks = await _playback.GetTracksAsync();
         var chapters = await _playback.GetChaptersAsync();
 
-        AudioTracks.Clear();
-        foreach (var track in tracks.Where(track => track.Kind == MediaTrackKind.Audio)) AudioTracks.Add(track);
+        _isRefreshingMediaNavigation = true;
+        try
+        {
+            AudioTracks.Clear();
+            foreach (var track in tracks.Where(track => track.Kind == MediaTrackKind.Audio)) AudioTracks.Add(track);
 
-        SubtitleTracks.Clear();
-        SubtitleTracks.Add(new MediaTrack(0, MediaTrackKind.Subtitle, "Subtitles Off", null, null, null, false, false,
-            !tracks.Any(track => track.Kind == MediaTrackKind.Subtitle && track.IsSelected)));
-        foreach (var track in tracks.Where(track => track.Kind == MediaTrackKind.Subtitle)) SubtitleTracks.Add(track);
+            SubtitleTracks.Clear();
+            SubtitleTracks.Add(new MediaTrack(0, MediaTrackKind.Subtitle, "Subtitles Off", null, null, null, false, false,
+                !tracks.Any(track => track.Kind == MediaTrackKind.Subtitle && track.IsSelected)));
+            foreach (var track in tracks.Where(track => track.Kind == MediaTrackKind.Subtitle)) SubtitleTracks.Add(track);
 
-        Chapters.Clear();
-        foreach (var chapter in chapters) Chapters.Add(chapter);
+            Chapters.Clear();
+            foreach (var chapter in chapters) Chapters.Add(chapter);
+        }
+        finally
+        {
+            _isRefreshingMediaNavigation = false;
+        }
 
         var video = tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Video);
         MediaDetailsText = string.Join(" • ", new[]
@@ -443,6 +452,20 @@ public sealed class MainViewModel : ObservableObject
             $"{Math.Max(0, SubtitleTracks.Count - 1)} subtitles",
             $"{Chapters.Count} chapters"
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+        await _logger.InfoAsync($"Media navigation refreshed: {AudioTracks.Count} audio, {Math.Max(0, SubtitleTracks.Count - 1)} subtitles, {Chapters.Count} chapters.");
+        return tracks.Count > 0 || chapters.Count > 0;
+    }
+
+    private async Task<bool> RefreshMediaNavigationWithRetryAsync(int attempts = 16, int delayMilliseconds = 500)
+    {
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            if (await RefreshMediaNavigationAsync()) return true;
+            if (_playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped) return false;
+            await Task.Delay(delayMilliseconds);
+        }
+        return false;
     }
 
     private async Task LoadExternalSubtitleAsync()
@@ -510,8 +533,7 @@ public sealed class MainViewModel : ObservableObject
 
             await _playback.OpenBluRayAsync(disc);
             StatusText = "Blu-ray main feature is loading...";
-            await Task.Delay(2200);
-            await RefreshMediaNavigationAsync();
+            var navigationReady = await RefreshMediaNavigationWithRetryAsync();
             await RefreshBluRayTitlesAsync();
             if (_playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped)
             {
@@ -519,7 +541,9 @@ public sealed class MainViewModel : ObservableObject
             }
             else
             {
-                StatusText = "Blu-ray playback active. Use Browse titles or Tracks for navigation.";
+                StatusText = navigationReady
+                    ? "Blu-ray playback active. Audio, subtitles, and chapters are ready in Tracks."
+                    : "Blu-ray playback active. Track metadata is still loading; open Tracks to refresh.";
             }
         }
         catch (Exception ex)
@@ -566,8 +590,7 @@ public sealed class MainViewModel : ObservableObject
             StatusText = $"Opening Blu-ray title {title.DisplayNumber}...";
             await _playback.OpenBluRayTitleAsync(_activeBluRayDisc, title.Index);
             IsBluRayPanelOpen = false;
-            await Task.Delay(1200);
-            await RefreshMediaNavigationAsync();
+            await RefreshMediaNavigationWithRetryAsync();
             await RefreshBluRayTitlesAsync();
             StatusText = _playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped
                 ? FormatBluRayFailure(_playback.LastPlaybackError)

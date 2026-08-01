@@ -205,18 +205,21 @@ public partial class MainWindow : Window
 
     private async void AudioTracks_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_viewModel.IsRefreshingMediaNavigation) return;
         if (sender is ListBox { SelectedItem: ParallaxStudio.Core.Models.MediaTrack track })
             await _viewModel.SelectAudioTrackAsync(track);
     }
 
     private async void SubtitleTracks_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_viewModel.IsRefreshingMediaNavigation) return;
         if (sender is ListBox { SelectedItem: ParallaxStudio.Core.Models.MediaTrack track })
             await _viewModel.SelectSubtitleTrackAsync(track);
     }
 
     private async void Chapters_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_viewModel.IsRefreshingMediaNavigation) return;
         if (sender is ListBox { SelectedItem: ParallaxStudio.Core.Models.MediaChapter chapter })
             await _viewModel.SelectChapterAsync(chapter);
     }

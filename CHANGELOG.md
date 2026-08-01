@@ -1,4 +1,4 @@
-## 1.0-dev.5.2.1
+## 1.0-dev.5.3
 
 - Automatically stages MakeMKV `libmmbd64.dll` as runtime `libaacs.dll` and `libbdplus.dll` after each successful build.
 - Preserves the standard bootstrap libraries as `libaacs.standard.dll` and `libbdplus.standard.dll` in build output.
