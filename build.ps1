@@ -48,7 +48,7 @@ if ($Bootstrap) {
     Write-Host 'Native dependency bootstrap completed.' -ForegroundColor Green
 }
 
-Write-Host "Building Parallax Studio v1.0-dev.5.3.2 ($Configuration)..." -ForegroundColor Cyan
+Write-Host "Building Parallax Studio v1.0-dev.5.4.2.1 ($Configuration)..." -ForegroundColor Cyan
 
 if ($Clean) {
     & dotnet clean $solution -c $Configuration

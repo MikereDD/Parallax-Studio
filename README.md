@@ -1,8 +1,10 @@
-# Parallax Studio v1.0-dev.2.2
+# Parallax Studio v1.0-dev.5.4.2.1
 
 A premium-direction foundation test for the cinematic player in the **Typezer∅ Studio Suite**. The original PowerShell/WinForms Parallax remains a separate stable application and is not replaced by this project.
 
 ## This test build
+
+This test focuses on responsive, serialized Blu-ray title discovery. Fresh title scans no longer auto-play the disc, MakeMKV discovery and libmpv disc opens are serialized, scanning is cancellable, results are applied in one UI batch, and optical-media swaps are detected automatically.
 
 The build combines the existing native libmpv foundation with the Studio Suite visual system established by Cadence Studio. It includes live selection of all six approved themes and the three typography profiles, the official Parallax icon, a redesigned cinematic shell, file-open/playback controls, fullscreen routing, optical-drive discovery, independent settings, logging, and resume-store foundations.
 

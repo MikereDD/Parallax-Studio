@@ -51,11 +51,11 @@ and stability suitable for `v1.0`.
 
 - [ ] Disc picker with drive label, type, and readiness
 - [ ] DVD and Blu-ray device configuration through libmpv
-- [ ] Title discovery and title switching
-- [ ] Chapter navigation for active disc titles
+- [x] Title discovery and title switching
+- [x] Chapter navigation for active disc titles
 - [ ] Single-title play-all episode splitting and gap-detection workflow
-- [ ] Clear encrypted-disc dependency and failure reporting
-- [ ] Disc eject / media-change handling
+- [x] Clear encrypted-disc dependency and failure reporting
+- [x] Disc eject / media-change handling
 
 ## v1.0-dev.6 — Fullscreen and control auto-hide
 

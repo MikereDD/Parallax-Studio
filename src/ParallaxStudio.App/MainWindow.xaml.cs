@@ -30,6 +30,11 @@ public partial class MainWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         _viewModel.ToggleFullscreenRequested += OnToggleFullscreenRequested;
+        SourceInitialized += (_, _) =>
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            HwndSource.FromHwnd(hwnd)?.AddHook(WindowProc);
+        };
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -288,6 +293,50 @@ public partial class MainWindow : Window
                 break;
         }
     }
+    private const int WmGetMinMaxInfo = 0x0024;
+
+    private nint WindowProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg == WmGetMinMaxInfo)
+        {
+            ApplyMonitorWorkArea(hwnd, lParam);
+            handled = true;
+        }
+        return nint.Zero;
+    }
+
+    private static void ApplyMonitorWorkArea(nint hwnd, nint lParam)
+    {
+        var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        if (monitor == nint.Zero || !GetMonitorInfo(monitor, ref info)) return;
+
+        var minMax = Marshal.PtrToStructure<MinMaxInfo>(lParam);
+        minMax.MaxPosition.X = Math.Abs(info.WorkArea.Left - info.Monitor.Left);
+        minMax.MaxPosition.Y = Math.Abs(info.WorkArea.Top - info.Monitor.Top);
+        minMax.MaxSize.X = Math.Abs(info.WorkArea.Right - info.WorkArea.Left);
+        minMax.MaxSize.Y = Math.Abs(info.WorkArea.Bottom - info.WorkArea.Top);
+        minMax.MaxTrackSize = minMax.MaxSize;
+        Marshal.StructureToPtr(minMax, lParam, true);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MinMaxInfo
+    {
+        public NativePoint Reserved;
+        public NativePoint MaxSize;
+        public NativePoint MaxPosition;
+        public NativePoint MinTrackSize;
+        public NativePoint MaxTrackSize;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeRect
     {

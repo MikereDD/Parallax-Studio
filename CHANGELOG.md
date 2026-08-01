@@ -1,3 +1,19 @@
+## 1.0-dev.5.4.2.1
+
+- Makes Blu-ray title discovery responsive by removing automatic playback from fresh title scans.
+- Serializes MakeMKV discovery and libmpv disc-open requests so they do not compete for the optical drive.
+- Adds a visible **Cancel scan** action that terminates the MakeMKV process tree and releases the drive.
+- Batches title results into the WPF list only after discovery completes, avoiding repeated layout churn.
+- Adds automatic optical-media change detection with a two-second lightweight watcher.
+- Clears stale title state when a disc is ejected or replaced and automatically recognizes the newly inserted disc.
+- Keys the in-memory title cache by disc identity instead of drive letter alone.
+- Keeps manual **Scan** as a fallback while normal disc swaps update automatically.
+
+## 1.0-dev.5.4.2
+
+- Fix MakeMKV title discovery after switching titles by retaining the actual Blu-ray device path.
+- Keep maximized/restored custom-chrome windows inside the monitor work area above the taskbar.
+
 ## 1.0-dev.5.3.1.2
 
 - Fixed WPF DataTemplate trigger placement in the polished audio, subtitle, and chapter cards so the presentation pass compiles correctly.
@@ -118,5 +134,17 @@
 - Restores the normal sidebar column to Auto sizing, forces a fresh WPF measure/arrange pass, and momentarily hides the native video host while its child HWND is resized.
 - Preserves the previous normal or maximized window state after fullscreen.
 
-## 1.0-dev.5.4
+## 1.0-dev.5.4.1
 - Added MakeMKV-backed Blu-ray title discovery with duration, chapter count, playlist metadata, likely-main-feature ranking, duplicate-duration hints, loading state, and direct title playback.
+
+## v1.0-dev.5.4.1
+- Preserve title selection when discovery refreshes.
+- Reopen title browser without restarting the current disc.
+- Keep the browser open during direct title switches and mark the active title.
+- Retry title-state detection after switching and refresh tracks, subtitles, chapters, duration, and timeline.
+- Clarify that main-feature playback continues while MakeMKV discovers titles.
+
+## 1.0-dev.5.4.2
+- Cache MakeMKV title metadata per Blu-ray disc so title switching and browser reopening do not rescan the physical disc.
+- Add useful fallback names and classifications for bonus features, deleted-scene/featurette candidates, short bonus items, and technical intro/warning items.
+- Preserve direct title playback, active-title state, tracks, subtitles, chapters, and work-area fixes.

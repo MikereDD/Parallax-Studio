@@ -10,8 +10,13 @@ namespace ParallaxStudio.Infrastructure.Playback;
 
 public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 {
+    private string? _activeBluRayDevice;
+    private string? _loadedBluRayCacheKey;
+    private readonly Dictionary<string, IReadOnlyList<BluRayTitle>> _bluRayTitleCache = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly LibMpvLibrary _library = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _discDiscoveryGate = new(1, 1);
     private readonly CancellationTokenSource _pollCancellation = new();
     private nint _context;
     private Task? _pollTask;
@@ -130,27 +135,37 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         if (!disc.IsReady)
             throw new InvalidOperationException("The Blu-ray drive is not ready.");
 
-        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        LastPlaybackError = null;
-        await logger.InfoAsync($"Blu-ray request: source=bd://longest, device={device}, label={disc.DisplayName}.", cancellationToken).ConfigureAwait(false);
-        await LogNativeDiscLibrariesAsync(cancellationToken).ConfigureAwait(false);
-        await WithInitializedContextAsync(context =>
+        await _discDiscoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            SetSnapshot(Snapshot with
+            var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+            _activeBluRayDevice = device;
+            _loadedBluRayCacheKey = BuildDiscCacheKey(disc);
+            LastPlaybackError = null;
+            await logger.InfoAsync($"Blu-ray request: source=bd://longest, device={device}, label={disc.DisplayName}.", cancellationToken).ConfigureAwait(false);
+            await LogNativeDiscLibrariesAsync(cancellationToken).ConfigureAwait(false);
+            await WithInitializedContextAsync(context =>
             {
-                State = PlaybackState.Loading,
-                Source = $"Blu-ray disc • {device}",
-                Title = CleanDiscTitle(disc.DisplayName, device),
-                Position = TimeSpan.Zero,
-                Duration = TimeSpan.Zero
-            });
+                SetSnapshot(Snapshot with
+                {
+                    State = PlaybackState.Loading,
+                    Source = $"Blu-ray disc • {device}",
+                    Title = CleanDiscTitle(disc.DisplayName, device),
+                    Position = TimeSpan.Zero,
+                    Duration = TimeSpan.Zero
+                });
 
-            _library.SetProperty(context, "bluray-device", device);
-            _library.Command(context, "loadfile", "bd://longest", "replace");
-            _paused = false;
-        }, cancellationToken).ConfigureAwait(false);
+                _library.SetProperty(context, "bluray-device", device);
+                _library.Command(context, "loadfile", "bd://longest", "replace");
+                _paused = false;
+            }, cancellationToken).ConfigureAwait(false);
 
-        await logger.InfoAsync($"Submitted Blu-ray main-feature request for {device}.", cancellationToken).ConfigureAwait(false);
+            await logger.InfoAsync($"Submitted Blu-ray main-feature request for {device}.", cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _discDiscoveryGate.Release();
+        }
     }
 
     public async Task OpenBluRayTitleAsync(DiscSource disc, int titleIndex, CancellationToken cancellationToken = default)
@@ -163,38 +178,81 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         if (titleIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(titleIndex));
 
-        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        LastPlaybackError = null;
-        await WithInitializedContextAsync(context =>
+        await _discDiscoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            SetSnapshot(Snapshot with
+            var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+            _activeBluRayDevice = device;
+            _loadedBluRayCacheKey = BuildDiscCacheKey(disc);
+            LastPlaybackError = null;
+            await WithInitializedContextAsync(context =>
             {
-                State = PlaybackState.Loading,
-                Source = $"Blu-ray disc • {device} • title {titleIndex + 1}",
-                Title = $"{CleanDiscTitle(disc.DisplayName, device)} — Title {titleIndex + 1}",
-                Position = TimeSpan.Zero,
-                Duration = TimeSpan.Zero
-            });
+                SetSnapshot(Snapshot with
+                {
+                    State = PlaybackState.Loading,
+                    Source = $"Blu-ray disc • {device} • title {titleIndex + 1}",
+                    Title = $"{CleanDiscTitle(disc.DisplayName, device)} — Title {titleIndex + 1}",
+                    Position = TimeSpan.Zero,
+                    Duration = TimeSpan.Zero
+                });
 
-            _library.SetProperty(context, "bluray-device", device);
-            _library.Command(context, "loadfile", $"bd://{titleIndex}", "replace");
-            _paused = false;
-        }, cancellationToken).ConfigureAwait(false);
+                _library.SetProperty(context, "bluray-device", device);
+                _library.Command(context, "loadfile", $"bd://{titleIndex}", "replace");
+                _paused = false;
+            }, cancellationToken).ConfigureAwait(false);
 
-        await logger.InfoAsync($"Submitted Blu-ray title {titleIndex + 1} request for {device}.", cancellationToken).ConfigureAwait(false);
+            await logger.InfoAsync($"Submitted Blu-ray title {titleIndex + 1} request for {device}.", cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _discDiscoveryGate.Release();
+        }
     }
 
-    public async Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(DiscSource disc, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(disc);
+        if (disc.Kind != DiscKind.BluRay || !disc.IsReady)
+            return [];
+
+        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        var cacheKey = BuildDiscCacheKey(disc);
+        var wasCurrentDisc = string.Equals(_loadedBluRayCacheKey, cacheKey, StringComparison.OrdinalIgnoreCase);
+        _activeBluRayDevice = device;
+
         var active = -1;
         var count = 0;
-        await WithInitializedContextAsync(context =>
+        if (IsInitialized && wasCurrentDisc &&
+            Snapshot.Source?.Contains(device, StringComparison.OrdinalIgnoreCase) == true)
         {
-            count = ParseInt(_library.GetProperty(context, "disc-titles"));
-            active = ParseInt(_library.GetProperty(context, "disc-title"), -1);
-        }, cancellationToken).ConfigureAwait(false);
+            await WithInitializedContextAsync(context =>
+            {
+                count = ParseInt(_library.GetProperty(context, "disc-titles"));
+                active = ParseInt(_library.GetProperty(context, "disc-title"), -1);
+            }, cancellationToken).ConfigureAwait(false);
+        }
 
-        var discovered = await DiscoverTitlesWithMakeMkvAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<BluRayTitle> discovered;
+        await _discDiscoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_bluRayTitleCache.TryGetValue(cacheKey, out var cached))
+            {
+                discovered = cached;
+                await logger.InfoAsync($"Using cached Blu-ray title metadata for {disc.DisplayName} ({cached.Count} titles).", cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                discovered = await DiscoverTitlesWithMakeMkvAsync(disc, cancellationToken).ConfigureAwait(false);
+                if (discovered.Count > 0)
+                    _bluRayTitleCache[cacheKey] = discovered;
+            }
+        }
+        finally
+        {
+            _discDiscoveryGate.Release();
+        }
+
         if (discovered.Count == 0)
         {
             return Enumerable.Range(0, count)
@@ -222,7 +280,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             .ToArray();
     }
 
-    private async Task<IReadOnlyList<BluRayTitle>> DiscoverTitlesWithMakeMkvAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<BluRayTitle>> DiscoverTitlesWithMakeMkvAsync(DiscSource disc, CancellationToken cancellationToken)
     {
         var executable = new[]
         {
@@ -233,10 +291,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         }.FirstOrDefault(File.Exists);
         if (executable is null) return [];
 
-        var device = Snapshot.Source?.Contains('•') == true
-            ? Snapshot.Source.Split('•').Last().Trim()
-            : null;
-        if (string.IsNullOrWhiteSpace(device)) return [];
+        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
 
         try
         {
@@ -251,6 +306,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             };
             using var process = Process.Start(startInfo);
             if (process is null) return [];
+            using var cancellationRegistration = cancellationToken.Register(() => TryKillProcess(process));
             var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -289,11 +345,56 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             await logger.InfoAsync($"MakeMKV reported {result.Length} Blu-ray titles for {device}.", cancellationToken).ConfigureAwait(false);
             return result;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await logger.InfoAsync($"MakeMKV title discovery cancelled for {disc.DisplayName}.", CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
         catch (Exception ex)
         {
             await logger.WarningAsync($"MakeMKV title discovery failed: {ex.Message}", cancellationToken).ConfigureAwait(false);
             return [];
         }
+    }
+
+    private static void TryKillProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Best effort only. Cancellation still unwinds the discovery task.
+        }
+    }
+
+    private static string BuildDiscCacheKey(DiscSource disc)
+    {
+        var root = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        var identityParts = new List<string>
+        {
+            root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            disc.DisplayName.Trim(),
+            disc.Kind.ToString()
+        };
+
+        try
+        {
+            var indexPath = Path.Combine(root, "BDMV", "index.bdmv");
+            if (File.Exists(indexPath))
+            {
+                var info = new FileInfo(indexPath);
+                identityParts.Add(info.Length.ToString(CultureInfo.InvariantCulture));
+                identityParts.Add(info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture));
+            }
+        }
+        catch
+        {
+            // Volume label and drive remain a safe fallback identity.
+        }
+
+        return string.Join("|", identityParts).ToUpperInvariant();
     }
 
     private static string QuoteArgument(string value) => value.Contains(' ') ? $"\"{value}\"" : value;
