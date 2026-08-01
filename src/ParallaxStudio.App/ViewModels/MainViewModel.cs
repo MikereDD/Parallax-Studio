@@ -42,6 +42,8 @@ public sealed class MainViewModel : ObservableObject
     private string _selectedTypography = "Cadence";
     private double _subtitleDelay;
     private string _mediaDetailsText = "No media metadata loaded";
+    private bool _isBluRayPanelOpen;
+    private DiscSource? _activeBluRayDisc;
 
     public MainViewModel(
         IPlaybackService playback,
@@ -63,6 +65,9 @@ public sealed class MainViewModel : ObservableObject
         OpenCommand = new AsyncRelayCommand(OpenAsync);
         ScanDiscsCommand = new AsyncRelayCommand(ScanDiscsAsync);
         PlayDiscCommand = new AsyncRelayCommand<DiscSource>(PlayDiscAsync, disc => disc is { IsReady: true, Kind: DiscKind.BluRay });
+        BrowseDiscTitlesCommand = new AsyncRelayCommand<DiscSource>(BrowseDiscTitlesAsync, disc => disc is { IsReady: true, Kind: DiscKind.BluRay });
+        PlayBluRayTitleCommand = new AsyncRelayCommand<BluRayTitle>(PlayBluRayTitleAsync);
+        ToggleBluRayPanelCommand = new RelayCommand(() => IsBluRayPanelOpen = !IsBluRayPanelOpen);
         PlayPauseCommand = new AsyncRelayCommand(PlayPauseAsync);
         StopCommand = new AsyncRelayCommand(StopAsync);
         SeekBackCommand = new AsyncRelayCommand(() => SeekAsync(-5));
@@ -85,12 +90,16 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<MediaTrack> AudioTracks { get; } = [];
     public ObservableCollection<MediaTrack> SubtitleTracks { get; } = [];
     public ObservableCollection<MediaChapter> Chapters { get; } = [];
+    public ObservableCollection<BluRayTitle> BluRayTitles { get; } = [];
     public IReadOnlyList<string> ThemeNames => StudioAppearanceService.Themes;
     public IReadOnlyList<string> TypographyNames => StudioAppearanceService.TypographyProfiles;
 
     public ICommand OpenCommand { get; }
     public ICommand ScanDiscsCommand { get; }
     public ICommand PlayDiscCommand { get; }
+    public ICommand BrowseDiscTitlesCommand { get; }
+    public ICommand PlayBluRayTitleCommand { get; }
+    public ICommand ToggleBluRayPanelCommand { get; }
     public ICommand PlayPauseCommand { get; }
     public ICommand StopCommand { get; }
     public ICommand SeekBackCommand { get; }
@@ -238,6 +247,12 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _isTracksPanelOpen;
         set => SetProperty(ref _isTracksPanelOpen, value);
+    }
+
+    public bool IsBluRayPanelOpen
+    {
+        get => _isBluRayPanelOpen;
+        set => SetProperty(ref _isBluRayPanelOpen, value);
     }
 
     public bool IsFullscreen
@@ -486,19 +501,73 @@ public sealed class MainViewModel : ObservableObject
         if (disc is null) return;
         try
         {
+            _activeBluRayDisc = disc;
             StatusText = $"Opening Blu-ray from {disc.DriveRoot}...";
             IsTracksPanelOpen = false;
+            IsBluRayPanelOpen = false;
             await _playback.OpenBluRayAsync(disc);
             StatusText = "Blu-ray main feature is loading...";
             await Task.Delay(1800);
             await RefreshMediaNavigationAsync();
-            StatusText = "Blu-ray playback active. Use Tracks for audio, subtitles, and chapters.";
+            await RefreshBluRayTitlesAsync();
+            StatusText = "Blu-ray playback active. Use Browse titles or Tracks for navigation.";
         }
         catch (Exception ex)
         {
             StatusText = "Blu-ray could not be opened. The disc may require AACS keys or unsupported protection.";
             await _logger.ErrorAsync($"Could not open Blu-ray from {disc.DriveRoot}", ex);
         }
+    }
+
+    private async Task BrowseDiscTitlesAsync(DiscSource? disc)
+    {
+        if (disc is null) return;
+        _activeBluRayDisc = disc;
+        IsTracksPanelOpen = false;
+
+        try
+        {
+            StatusText = "Opening the Blu-ray so titles can be discovered...";
+            await _playback.OpenBluRayAsync(disc);
+            await Task.Delay(1800);
+            await RefreshBluRayTitlesAsync();
+            IsBluRayPanelOpen = true;
+            StatusText = BluRayTitles.Count == 0
+                ? "The disc opened, but libmpv did not report a title list. Main-feature playback remains available."
+                : $"Found {BluRayTitles.Count} Blu-ray title{(BluRayTitles.Count == 1 ? string.Empty : "s")}.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = "Blu-ray titles could not be read. Check AACS configuration or the playback log.";
+            await _logger.ErrorAsync($"Could not browse Blu-ray titles from {disc.DriveRoot}", ex);
+        }
+    }
+
+    private async Task PlayBluRayTitleAsync(BluRayTitle? title)
+    {
+        if (title is null || _activeBluRayDisc is null) return;
+        try
+        {
+            StatusText = $"Opening Blu-ray title {title.DisplayNumber}...";
+            await _playback.OpenBluRayTitleAsync(_activeBluRayDisc, title.Index);
+            IsBluRayPanelOpen = false;
+            await Task.Delay(1200);
+            await RefreshMediaNavigationAsync();
+            await RefreshBluRayTitlesAsync();
+            StatusText = $"Blu-ray title {title.DisplayNumber} is playing.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Blu-ray title {title.DisplayNumber} could not be opened.";
+            await _logger.ErrorAsync(StatusText, ex);
+        }
+    }
+
+    private async Task RefreshBluRayTitlesAsync()
+    {
+        var titles = await _playback.GetBluRayTitlesAsync();
+        BluRayTitles.Clear();
+        foreach (var title in titles) BluRayTitles.Add(title);
     }
 
     private async Task ScanDiscsAsync()

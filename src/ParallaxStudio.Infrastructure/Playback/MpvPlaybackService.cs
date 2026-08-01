@@ -142,6 +142,49 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         await logger.InfoAsync($"Opened Blu-ray main feature from {device}.", cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task OpenBluRayTitleAsync(DiscSource disc, int titleIndex, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(disc);
+        if (disc.Kind != DiscKind.BluRay)
+            throw new InvalidOperationException("The selected optical source is not a Blu-ray disc.");
+        if (!disc.IsReady)
+            throw new InvalidOperationException("The Blu-ray drive is not ready.");
+        if (titleIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(titleIndex));
+
+        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        await WithInitializedContextAsync(context =>
+        {
+            SetSnapshot(Snapshot with
+            {
+                State = PlaybackState.Loading,
+                Source = $"Blu-ray disc • {device} • title {titleIndex + 1}",
+                Title = $"{CleanDiscTitle(disc.DisplayName, device)} — Title {titleIndex + 1}",
+                Position = TimeSpan.Zero,
+                Duration = TimeSpan.Zero
+            });
+
+            _library.SetProperty(context, "bluray-device", device);
+            _library.Command(context, "loadfile", $"bd://{titleIndex}", "replace");
+            _paused = false;
+        }, cancellationToken).ConfigureAwait(false);
+
+        await logger.InfoAsync($"Opened Blu-ray title {titleIndex + 1} from {device}.", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(CancellationToken cancellationToken = default)
+    {
+        var titles = new List<BluRayTitle>();
+        await WithInitializedContextAsync(context =>
+        {
+            var count = ParseInt(_library.GetProperty(context, "disc-titles"));
+            var active = ParseInt(_library.GetProperty(context, "disc-title"), -1);
+            for (var index = 0; index < count; index++)
+                titles.Add(new BluRayTitle(index, index == active));
+        }, cancellationToken).ConfigureAwait(false);
+        return titles;
+    }
+
     public Task TogglePauseAsync(CancellationToken cancellationToken = default) =>
         WithInitializedContextAsync(context =>
         {

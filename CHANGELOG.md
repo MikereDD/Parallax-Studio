@@ -1,6 +1,25 @@
 # Changelog
 
-## v1.0-dev.5
+## v1.0-dev.5.1.2
+
+- Expanded first-run native bootstrap to install libmpv, libaacs, libbdplus, and libdvdcss.
+- Pinned the libaacs/libbdplus binary release tag and retained a local SHA-256 lock manifest.
+- Made optional disc-library download failures warning-only so ordinary playback builds remain usable.
+- Preserved the docked Blu-ray title browser layout from dev.5.1.1.
+
+
+## v1.0-dev.5.1.1
+
+- Fixed the Blu-ray title browser being obscured by the native libmpv video HWND.
+- Docked Blu-ray and Tracks panels beside the video surface instead of layering WPF content over it.
+- Made the right column size to the active panel and temporarily hide the normal sidebar while a navigation panel is open.
+- Preserved video aspect ratio and playback while browsing disc titles.
+
+## v1.0-dev.5.1.1.1
+
+- Added a direct Blu-ray title browser backed by libmpv disc-title properties.
+- Added manual playback of numbered Blu-ray titles.
+- Added clearer main-feature and title-browsing actions in the optical-media card.
 
 - Added first Blu-ray disc playback foundation.
 - Added a Play Blu-ray action for detected ready Blu-ray drives.

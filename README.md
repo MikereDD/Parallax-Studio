@@ -178,3 +178,21 @@ The first successful bootstrap writes `native-dependencies.lock.json` containing
 ## Blu-ray foundation
 
 Insert a Blu-ray, select **Scan**, then **Play Blu-ray**. This first slice uses libmpv/libbluray direct main-feature playback (`bd://longest`) and intentionally does not bundle or download AACS keys.
+
+
+## Native disc libraries
+
+A fresh bootstrap now attempts to install the complete x64 native playback set into `native/`:
+
+- `libmpv-2.dll` — required playback backend
+- `libaacs.dll` — optional AACS support
+- `libbdplus.dll` — optional BD+ support
+- `libdvdcss-2.dll` — optional CSS-encrypted DVD support
+
+Run:
+
+```powershell
+.\build.ps1 -Bootstrap -InstallBootstrapTools -Run
+```
+
+Optional libraries never make the normal build fail. The bootstrap records downloaded file hashes in `native-dependencies.lock.json`. No decryption keys are included or downloaded.

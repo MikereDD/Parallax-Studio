@@ -1,23 +1,9 @@
-# Native runtime files
+# Native runtime directory
 
-`libmpv-2.dll` is required for playback and intentionally excluded from Git.
-
-Install the pinned x64-v3 build automatically:
+Do not commit downloaded DLLs. Run:
 
 ```powershell
-.\scripts\Get-NativeDependencies.ps1
+.\build.ps1 -Bootstrap -InstallBootstrapTools -Run
 ```
 
-If 7-Zip is not installed:
-
-```powershell
-.\scripts\Get-NativeDependencies.ps1 -InstallTools
-```
-
-Or bootstrap while building:
-
-```powershell
-.\build.ps1 -Bootstrap -Run
-```
-
-`libdvdcss-2.dll` and `libaacs.dll` remain optional, user-supplied disc libraries until the disc-distribution policy is finalized.
+The bootstrap installs `libmpv-2.dll` and attempts the optional disc helpers `libaacs.dll`, `libbdplus.dll`, and `libdvdcss-2.dll`. No AACS keys are included or downloaded.

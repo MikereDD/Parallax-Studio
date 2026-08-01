@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "dependencies": [
     {
       "id": "libmpv",
@@ -9,19 +9,43 @@
       "archiveName": "mpv-dev-x86_64-v3-20260421-git-5921fe5.7z",
       "downloadUrl": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260421/mpv-dev-x86_64-v3-20260421-git-5921fe5.7z",
       "outputFile": "libmpv-2.dll",
-      "distribution": "bootstrap-download"
-    },
-    {
-      "id": "libdvdcss",
-      "required": false,
-      "outputFile": "libdvdcss-2.dll",
-      "distribution": "user-supplied"
+      "distribution": "bootstrap-download",
+      "archiveType": "7z"
     },
     {
       "id": "libaacs",
       "required": false,
+      "architecture": "x64",
+      "version": "0.12.0",
+      "releaseTag": "0.12.0-0.2.0-20260715",
+      "releaseApiUrl": "https://api.github.com/repos/KnugiHK/libaacs-libbdplus-windows/releases/tags/0.12.0-0.2.0-20260715",
       "outputFile": "libaacs.dll",
-      "distribution": "user-supplied"
+      "distribution": "bootstrap-download-optional",
+      "archiveType": "zip",
+      "sourceProject": "KnugiHK/libaacs-libbdplus-windows"
+    },
+    {
+      "id": "libbdplus",
+      "required": false,
+      "architecture": "x64",
+      "version": "0.2.0",
+      "releaseTag": "0.12.0-0.2.0-20260715",
+      "releaseApiUrl": "https://api.github.com/repos/KnugiHK/libaacs-libbdplus-windows/releases/tags/0.12.0-0.2.0-20260715",
+      "outputFile": "libbdplus.dll",
+      "distribution": "bootstrap-download-optional",
+      "archiveType": "zip",
+      "sourceProject": "KnugiHK/libaacs-libbdplus-windows"
+    },
+    {
+      "id": "libdvdcss",
+      "required": false,
+      "architecture": "x64",
+      "version": "1.2.12",
+      "downloadUrl": "https://download.videolan.org/pub/libdvdcss/1.2.12/win64/libdvdcss-2.dll",
+      "outputFile": "libdvdcss-2.dll",
+      "distribution": "bootstrap-download-optional",
+      "archiveType": "dll",
+      "sourceProject": "VideoLAN/libdvdcss"
     }
   ]
 }

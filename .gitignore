@@ -12,3 +12,5 @@ publish/
 native/*.dll
 !native/README.md
 native/.downloads/
+
+native-dependencies.lock.json
