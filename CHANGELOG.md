@@ -1,4 +1,4 @@
-## 1.0-dev.5.3.1.1
+## 1.0-dev.5.3.1.2
 
 - Fixed WPF DataTemplate trigger placement in the polished audio, subtitle, and chapter cards so the presentation pass compiles correctly.
 
@@ -111,3 +111,9 @@
 - Log Blu-ray source, drive, native disc libraries, and AACS key database presence.
 - Surface failed Blu-ray loads in the player status bar.
 - Correct diagnostics path documentation to `%LOCALAPPDATA%\ParallaxStudio\logs`.
+
+## v1.0-dev.5.3.1.2
+
+- Fixed the native video surface overlapping and clipping the Tracks, Subtitles & Chapters panel after exiting fullscreen.
+- Restores the normal sidebar column to Auto sizing, forces a fresh WPF measure/arrange pass, and momentarily hides the native video host while its child HWND is resized.
+- Preserves the previous normal or maximized window state after fullscreen.

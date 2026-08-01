@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Controls.Primitives;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using ParallaxStudio.App.Interop;
 using ParallaxStudio.App.ViewModels;
 
@@ -124,17 +125,42 @@ public partial class MainWindow : Window
 
     private void ExitFullscreen()
     {
+        // Temporarily remove the native HWND video surface while WPF restores the
+        // normal grid. This prevents the fullscreen-sized child window from
+        // painting over the sidebar until its host receives the new bounds.
+        VideoHost.Visibility = Visibility.Collapsed;
+
         Topmost = false;
         ResizeMode = ResizeMode.CanResize;
         TitleBarRow.Height = new GridLength(48);
-        SidebarColumn.Width = new GridLength(330);
+        SidebarColumn.Width = GridLength.Auto;
         MainContentGrid.Margin = new Thickness(20, 18, 20, 12);
         VideoBorder.Margin = new Thickness(0, 0, 14, 0);
+
+        WindowState = WindowState.Normal;
         Left = _boundsBeforeFullscreen.Left;
         Top = _boundsBeforeFullscreen.Top;
         Width = _boundsBeforeFullscreen.Width;
         Height = _boundsBeforeFullscreen.Height;
-        WindowState = _stateBeforeFullscreen;
+
+        if (_stateBeforeFullscreen == WindowState.Maximized)
+        {
+            WindowState = WindowState.Maximized;
+        }
+
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            MainContentGrid.InvalidateMeasure();
+            MainContentGrid.InvalidateArrange();
+            VideoBorder.InvalidateMeasure();
+            VideoBorder.InvalidateArrange();
+            UpdateLayout();
+
+            VideoHost.Visibility = Visibility.Visible;
+            VideoHost.InvalidateMeasure();
+            VideoHost.InvalidateArrange();
+            UpdateLayout();
+        }));
     }
 
     private Rect GetActiveMonitorBounds()
