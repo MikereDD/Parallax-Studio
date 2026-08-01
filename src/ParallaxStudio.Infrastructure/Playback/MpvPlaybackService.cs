@@ -259,6 +259,9 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         await WithInitializedContextAsync(context =>
         {
             var count = ParseInt(_library.GetProperty(context, "track-list/count"));
+            var activeAudioId = ParseInt(_library.GetProperty(context, "aid"), -1);
+            var activeSubtitleId = ParseInt(_library.GetProperty(context, "sid"), -1);
+            var activeVideoId = ParseInt(_library.GetProperty(context, "vid"), -1);
             for (var index = 0; index < count; index++)
             {
                 var prefix = $"track-list/{index}/";
@@ -289,7 +292,13 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                     id, kind.Value, label, language, codec, details,
                     IsYes(_library.GetProperty(context, prefix + "default")),
                     IsYes(_library.GetProperty(context, prefix + "forced")),
-                    IsYes(_library.GetProperty(context, prefix + "selected"))));
+                    kind.Value switch
+                    {
+                        MediaTrackKind.Audio => id == activeAudioId,
+                        MediaTrackKind.Subtitle => id == activeSubtitleId,
+                        MediaTrackKind.Video => id == activeVideoId,
+                        _ => IsYes(_library.GetProperty(context, prefix + "selected"))
+                    }));
             }
         }, cancellationToken).ConfigureAwait(false);
         return result;

@@ -73,7 +73,7 @@ public sealed class MainViewModel : ObservableObject
         StopCommand = new AsyncRelayCommand(StopAsync);
         SeekBackCommand = new AsyncRelayCommand(() => SeekAsync(-5));
         SeekForwardCommand = new AsyncRelayCommand(() => SeekAsync(5));
-        ToggleTracksCommand = new RelayCommand(() => IsTracksPanelOpen = !IsTracksPanelOpen);
+        ToggleTracksCommand = new AsyncRelayCommand(ToggleTracksAsync);
         ToggleFullscreenCommand = new RelayCommand(ToggleFullscreen);
         ToggleMuteCommand = new AsyncRelayCommand(ToggleMuteAsync);
         LoadSubtitleCommand = new AsyncRelayCommand(LoadExternalSubtitleAsync);
@@ -361,6 +361,18 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+
+    private async Task ToggleTracksAsync()
+    {
+        IsTracksPanelOpen = !IsTracksPanelOpen;
+        if (!IsTracksPanelOpen) return;
+
+        // The native video host and libmpv can finish restoring asynchronously after
+        // fullscreen. Refresh until the complete navigation snapshot is available.
+        await Task.Delay(75);
+        await RefreshMediaNavigationWithRetryAsync(8, 150);
+    }
+
     public async Task SelectAudioTrackAsync(MediaTrack? track)
     {
         if (track is null) return;
@@ -424,6 +436,17 @@ public sealed class MainViewModel : ObservableObject
     {
         var tracks = await _playback.GetTracksAsync();
         var chapters = await _playback.GetChaptersAsync();
+
+        // During fullscreen restoration mpv may briefly expose an incomplete track-list.
+        // Never replace a populated UI with that transient snapshot.
+        var incomingAudioCount = tracks.Count(track => track.Kind == MediaTrackKind.Audio);
+        var incomingSubtitleCount = tracks.Count(track => track.Kind == MediaTrackKind.Subtitle);
+        var hasExistingNavigation = AudioTracks.Count > 0 || SubtitleTracks.Count > 1 || Chapters.Count > 0;
+        if (hasExistingNavigation && incomingAudioCount == 0 && incomingSubtitleCount == 0 && chapters.Count == 0)
+        {
+            await _logger.InfoAsync("Ignored transient empty media-navigation snapshot.");
+            return false;
+        }
 
         _isRefreshingMediaNavigation = true;
         try
