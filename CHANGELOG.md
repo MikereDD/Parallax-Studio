@@ -117,3 +117,6 @@
 - Fixed the native video surface overlapping and clipping the Tracks, Subtitles & Chapters panel after exiting fullscreen.
 - Restores the normal sidebar column to Auto sizing, forces a fresh WPF measure/arrange pass, and momentarily hides the native video host while its child HWND is resized.
 - Preserves the previous normal or maximized window state after fullscreen.
+
+## 1.0-dev.5.4
+- Added MakeMKV-backed Blu-ray title discovery with duration, chapter count, playlist metadata, likely-main-feature ranking, duplicate-duration hints, loading state, and direct title playback.

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
 using ParallaxStudio.Core.Enums;
 using ParallaxStudio.Core.Events;
 using ParallaxStudio.Core.Models;
@@ -184,15 +186,125 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 
     public async Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(CancellationToken cancellationToken = default)
     {
-        var titles = new List<BluRayTitle>();
+        var active = -1;
+        var count = 0;
         await WithInitializedContextAsync(context =>
         {
-            var count = ParseInt(_library.GetProperty(context, "disc-titles"));
-            var active = ParseInt(_library.GetProperty(context, "disc-title"), -1);
-            for (var index = 0; index < count; index++)
-                titles.Add(new BluRayTitle(index, index == active));
+            count = ParseInt(_library.GetProperty(context, "disc-titles"));
+            active = ParseInt(_library.GetProperty(context, "disc-title"), -1);
         }, cancellationToken).ConfigureAwait(false);
-        return titles;
+
+        var discovered = await DiscoverTitlesWithMakeMkvAsync(cancellationToken).ConfigureAwait(false);
+        if (discovered.Count == 0)
+        {
+            return Enumerable.Range(0, count)
+                .Select(index => new BluRayTitle(index, index == active, TimeSpan.Zero))
+                .ToArray();
+        }
+
+        var longest = discovered.Max(title => title.Duration);
+        var durationGroups = discovered
+            .Where(title => title.Duration > TimeSpan.Zero)
+            .GroupBy(title => Math.Round(title.Duration.TotalSeconds / 2d))
+            .ToDictionary(group => group.Key, group => group.Count());
+
+        return discovered
+            .Select(title => title with
+            {
+                IsActive = title.Index == active,
+                IsLikelyMainFeature = longest > TimeSpan.Zero && title.Duration >= longest - TimeSpan.FromSeconds(2),
+                IsLikelyDuplicate = title.Duration > TimeSpan.Zero &&
+                    durationGroups.TryGetValue(Math.Round(title.Duration.TotalSeconds / 2d), out var matches) && matches > 1
+            })
+            .OrderByDescending(title => title.IsLikelyMainFeature)
+            .ThenByDescending(title => title.Duration)
+            .ThenBy(title => title.Index)
+            .ToArray();
+    }
+
+    private async Task<IReadOnlyList<BluRayTitle>> DiscoverTitlesWithMakeMkvAsync(CancellationToken cancellationToken)
+    {
+        var executable = new[]
+        {
+            @"C:\Program Files (x86)\MakeMKV\makemkvcon64.exe",
+            @"C:\Program Files\MakeMKV\makemkvcon64.exe",
+            @"C:\Program Files (x86)\MakeMKV\makemkvcon.exe",
+            @"C:\Program Files\MakeMKV\makemkvcon.exe"
+        }.FirstOrDefault(File.Exists);
+        if (executable is null) return [];
+
+        var device = Snapshot.Source?.Contains('•') == true
+            ? Snapshot.Source.Split('•').Last().Trim()
+            : null;
+        if (string.IsNullOrWhiteSpace(device)) return [];
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executable,
+                Arguments = $"-r --minlength=0 info dev:{QuoteArgument(device)}",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            using var process = Process.Start(startInfo);
+            if (process is null) return [];
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            var output = await outputTask.ConfigureAwait(false);
+            var error = await errorTask.ConfigureAwait(false);
+            if (process.ExitCode != 0)
+            {
+                await logger.WarningAsync($"MakeMKV title discovery exited with code {process.ExitCode}: {error}", cancellationToken).ConfigureAwait(false);
+                return [];
+            }
+
+            var builders = new Dictionary<int, TitleInfoBuilder>();
+            foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var match = Regex.Match(rawLine, "^TINFO:(\\d+),(\\d+),\\d+,\"(.*)\"$");
+                if (!match.Success) continue;
+                var index = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+                var code = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+                var value = match.Groups[3].Value.Replace("\"\"", "\"");
+                if (!builders.TryGetValue(index, out var builder)) builders[index] = builder = new TitleInfoBuilder(index);
+                switch (code)
+                {
+                    case 2: builder.Name = value; break;
+                    case 8: builder.ChapterCount = ParseInt(value); break;
+                    case 9: if (TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out var duration)) builder.Duration = duration; break;
+                    case 16: builder.Playlist = value; break;
+                    case 30: if (string.IsNullOrWhiteSpace(builder.Name)) builder.Name = value; break;
+                    case 49: if (string.IsNullOrWhiteSpace(builder.Name)) builder.Name = value; break;
+                }
+            }
+
+            var result = builders.Values
+                .Where(builder => builder.Duration > TimeSpan.Zero || builder.ChapterCount > 0 || !string.IsNullOrWhiteSpace(builder.Playlist))
+                .Select(builder => new BluRayTitle(builder.Index, false, builder.Duration, builder.ChapterCount, builder.Playlist, builder.Name))
+                .ToArray();
+            await logger.InfoAsync($"MakeMKV reported {result.Length} Blu-ray titles for {device}.", cancellationToken).ConfigureAwait(false);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            await logger.WarningAsync($"MakeMKV title discovery failed: {ex.Message}", cancellationToken).ConfigureAwait(false);
+            return [];
+        }
+    }
+
+    private static string QuoteArgument(string value) => value.Contains(' ') ? $"\"{value}\"" : value;
+
+    private sealed class TitleInfoBuilder(int index)
+    {
+        public int Index { get; } = index;
+        public TimeSpan Duration { get; set; }
+        public int ChapterCount { get; set; }
+        public string? Playlist { get; set; }
+        public string? Name { get; set; }
     }
 
     public Task TogglePauseAsync(CancellationToken cancellationToken = default) =>

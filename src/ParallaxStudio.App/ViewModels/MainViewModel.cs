@@ -45,6 +45,8 @@ public sealed class MainViewModel : ObservableObject
     private bool _isBluRayPanelOpen;
     private DiscSource? _activeBluRayDisc;
     private bool _isRefreshingMediaNavigation;
+    private bool _isBluRayTitleDiscoveryBusy;
+    private string _bluRayTitleSummary = "Open a Blu-ray to discover its playlists and extras.";
 
     public MainViewModel(
         IPlaybackService playback,
@@ -93,6 +95,16 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<MediaChapter> Chapters { get; } = [];
     public ObservableCollection<BluRayTitle> BluRayTitles { get; } = [];
     public bool IsRefreshingMediaNavigation => _isRefreshingMediaNavigation;
+    public bool IsBluRayTitleDiscoveryBusy
+    {
+        get => _isBluRayTitleDiscoveryBusy;
+        private set => SetProperty(ref _isBluRayTitleDiscoveryBusy, value);
+    }
+    public string BluRayTitleSummary
+    {
+        get => _bluRayTitleSummary;
+        private set => SetProperty(ref _bluRayTitleSummary, value);
+    }
     public IReadOnlyList<string> ThemeNames => StudioAppearanceService.Themes;
     public IReadOnlyList<string> TypographyNames => StudioAppearanceService.TypographyProfiles;
 
@@ -587,21 +599,28 @@ public sealed class MainViewModel : ObservableObject
             if (!EnsureAacsConfigurationReady())
                 return;
 
-            StatusText = "Opening the Blu-ray so titles can be discovered...";
-            await _playback.OpenBluRayAsync(disc);
-            await Task.Delay(2200);
-            await RefreshBluRayTitlesAsync();
             IsBluRayPanelOpen = true;
+            IsBluRayTitleDiscoveryBusy = true;
+            BluRayTitleSummary = "Reading playlists, durations, chapters, and likely extras with MakeMKV...";
+            StatusText = "Opening the Blu-ray and discovering titles...";
+            await _playback.OpenBluRayAsync(disc);
+            await Task.Delay(1200);
+            await RefreshBluRayTitlesAsync();
             StatusText = _playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped
                 ? FormatBluRayFailure(_playback.LastPlaybackError)
                 : BluRayTitles.Count == 0
-                    ? "The disc loaded, but libmpv did not report a title list."
-                    : $"Found {BluRayTitles.Count} Blu-ray title{(BluRayTitles.Count == 1 ? string.Empty : "s")}.";
+                    ? "The disc loaded, but no title metadata was reported."
+                    : $"Found {BluRayTitles.Count} Blu-ray title{(BluRayTitles.Count == 1 ? string.Empty : "s")}, sorted by likely relevance.";
         }
         catch (Exception ex)
         {
             StatusText = "Blu-ray titles could not be read. Check AACS configuration or the playback log.";
+            BluRayTitleSummary = "Title discovery failed. The playback log contains the MakeMKV or libmpv details.";
             await _logger.ErrorAsync($"Could not browse Blu-ray titles from {disc.DriveRoot}", ex);
+        }
+        finally
+        {
+            IsBluRayTitleDiscoveryBusy = false;
         }
     }
 
@@ -683,6 +702,15 @@ public sealed class MainViewModel : ObservableObject
         var titles = await _playback.GetBluRayTitlesAsync();
         BluRayTitles.Clear();
         foreach (var title in titles) BluRayTitles.Add(title);
+        if (titles.Count == 0)
+        {
+            BluRayTitleSummary = "No title metadata was reported. Main-feature playback can still be used.";
+            return;
+        }
+        var main = titles.FirstOrDefault(title => title.IsLikelyMainFeature);
+        BluRayTitleSummary = main is null
+            ? $"{titles.Count} titles discovered. Select any title to play it directly."
+            : $"{titles.Count} titles discovered. Title {main.DisplayNumber} is the strongest main-feature candidate at {main.DurationText}.";
     }
 
     private async Task ScanDiscsAsync()
