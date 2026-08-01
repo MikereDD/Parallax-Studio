@@ -34,6 +34,40 @@ internal sealed class LibMpvLibrary : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate nint MpvErrorString(int error);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int MpvRequestLogMessages(nint context, nint minLevel);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate nint MpvWaitEvent(nint context, double timeout);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MpvEventNative
+    {
+        public int EventId;
+        public int Error;
+        public ulong ReplyUserdata;
+        public nint Data;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MpvEventLogMessageNative
+    {
+        public nint Prefix;
+        public nint Level;
+        public nint Text;
+        public int LogLevel;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MpvEventEndFileNative
+    {
+        public int Reason;
+        public int Error;
+        public long PlaylistEntryId;
+        public long PlaylistInsertId;
+        public int PlaylistInsertNumEntries;
+    }
+
     private nint _libraryHandle;
     private MpvCreate? _create;
     private MpvInitialize? _initialize;
@@ -45,6 +79,8 @@ internal sealed class LibMpvLibrary : IDisposable
     private MpvCommand? _command;
     private MpvClientApiVersion? _clientApiVersion;
     private MpvErrorString? _errorString;
+    private MpvRequestLogMessages? _requestLogMessages;
+    private MpvWaitEvent? _waitEvent;
 
     public string? LoadedPath { get; private set; }
     public bool IsLoaded => _libraryHandle != nint.Zero;
@@ -104,6 +140,75 @@ internal sealed class LibMpvLibrary : IDisposable
             Check(_setPropertyString!(context, namePointer, valuePointer), $"set property {name}"));
 
     public void Initialize(nint context) => Check(_initialize!(context), "initialize libmpv");
+
+    public void RequestLogMessages(nint context, string minimumLevel)
+    {
+        var pointer = nint.Zero;
+        try
+        {
+            pointer = Marshal.StringToCoTaskMemUTF8(minimumLevel);
+            Check(_requestLogMessages!(context, pointer), "request log messages");
+        }
+        finally
+        {
+            if (pointer != nint.Zero) Marshal.FreeCoTaskMem(pointer);
+        }
+    }
+
+    public IReadOnlyList<MpvDiagnosticEvent> DrainEvents(nint context)
+    {
+        var events = new List<MpvDiagnosticEvent>();
+        while (true)
+        {
+            var eventPointer = _waitEvent!(context, 0);
+            if (eventPointer == nint.Zero) break;
+            var nativeEvent = Marshal.PtrToStructure<MpvEventNative>(eventPointer);
+            if (nativeEvent.EventId == 0) break;
+
+            switch (nativeEvent.EventId)
+            {
+                case 2: // MPV_EVENT_LOG_MESSAGE
+                    if (nativeEvent.Data != nint.Zero)
+                    {
+                        var log = Marshal.PtrToStructure<MpvEventLogMessageNative>(nativeEvent.Data);
+                        events.Add(new MpvDiagnosticEvent(
+                            "log",
+                            Marshal.PtrToStringUTF8(log.Level) ?? "info",
+                            Marshal.PtrToStringUTF8(log.Prefix) ?? "mpv",
+                            (Marshal.PtrToStringUTF8(log.Text) ?? string.Empty).Trim()));
+                    }
+                    break;
+                case 6:
+                    events.Add(new MpvDiagnosticEvent("start-file", "info", "player", "Starting media load."));
+                    break;
+                case 7: // MPV_EVENT_END_FILE
+                    if (nativeEvent.Data != nint.Zero)
+                    {
+                        var end = Marshal.PtrToStructure<MpvEventEndFileNative>(nativeEvent.Data);
+                        var errorText = end.Error < 0 ? GetErrorText(end.Error) : "none";
+                        events.Add(new MpvDiagnosticEvent(
+                            "end-file",
+                            end.Error < 0 ? "error" : "info",
+                            "player",
+                            $"Media ended. reason={end.Reason}, error={end.Error} ({errorText})."));
+                    }
+                    break;
+                case 8:
+                    events.Add(new MpvDiagnosticEvent("file-loaded", "info", "player", "Media loaded successfully."));
+                    break;
+                case 11:
+                    events.Add(new MpvDiagnosticEvent("idle", "debug", "player", "Player entered idle state."));
+                    break;
+            }
+        }
+        return events;
+    }
+
+    public string GetErrorText(int error)
+    {
+        var pointer = _errorString?.Invoke(error) ?? nint.Zero;
+        return pointer == nint.Zero ? $"error {error}" : Marshal.PtrToStringUTF8(pointer) ?? $"error {error}";
+    }
 
     public string? GetProperty(nint context, string name)
     {
@@ -172,6 +277,8 @@ internal sealed class LibMpvLibrary : IDisposable
         _command = Bind<MpvCommand>("mpv_command");
         _clientApiVersion = Bind<MpvClientApiVersion>("mpv_client_api_version");
         _errorString = Bind<MpvErrorString>("mpv_error_string");
+        _requestLogMessages = Bind<MpvRequestLogMessages>("mpv_request_log_messages");
+        _waitEvent = Bind<MpvWaitEvent>("mpv_wait_event");
     }
 
     private T Bind<T>(string exportName) where T : Delegate
@@ -228,3 +335,5 @@ internal sealed class LibMpvLibrary : IDisposable
         _libraryHandle = nint.Zero;
     }
 }
+
+internal sealed record MpvDiagnosticEvent(string Kind, string Level, string Prefix, string Message);

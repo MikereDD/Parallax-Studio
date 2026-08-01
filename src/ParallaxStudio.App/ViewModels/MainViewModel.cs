@@ -505,12 +505,22 @@ public sealed class MainViewModel : ObservableObject
             StatusText = $"Opening Blu-ray from {disc.DriveRoot}...";
             IsTracksPanelOpen = false;
             IsBluRayPanelOpen = false;
+            if (!EnsureAacsConfigurationReady())
+                return;
+
             await _playback.OpenBluRayAsync(disc);
             StatusText = "Blu-ray main feature is loading...";
-            await Task.Delay(1800);
+            await Task.Delay(2200);
             await RefreshMediaNavigationAsync();
             await RefreshBluRayTitlesAsync();
-            StatusText = "Blu-ray playback active. Use Browse titles or Tracks for navigation.";
+            if (_playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped)
+            {
+                StatusText = FormatBluRayFailure(_playback.LastPlaybackError);
+            }
+            else
+            {
+                StatusText = "Blu-ray playback active. Use Browse titles or Tracks for navigation.";
+            }
         }
         catch (Exception ex)
         {
@@ -527,14 +537,19 @@ public sealed class MainViewModel : ObservableObject
 
         try
         {
+            if (!EnsureAacsConfigurationReady())
+                return;
+
             StatusText = "Opening the Blu-ray so titles can be discovered...";
             await _playback.OpenBluRayAsync(disc);
-            await Task.Delay(1800);
+            await Task.Delay(2200);
             await RefreshBluRayTitlesAsync();
             IsBluRayPanelOpen = true;
-            StatusText = BluRayTitles.Count == 0
-                ? "The disc opened, but libmpv did not report a title list. Main-feature playback remains available."
-                : $"Found {BluRayTitles.Count} Blu-ray title{(BluRayTitles.Count == 1 ? string.Empty : "s")}.";
+            StatusText = _playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped
+                ? FormatBluRayFailure(_playback.LastPlaybackError)
+                : BluRayTitles.Count == 0
+                    ? "The disc loaded, but libmpv did not report a title list."
+                    : $"Found {BluRayTitles.Count} Blu-ray title{(BluRayTitles.Count == 1 ? string.Empty : "s")}.";
         }
         catch (Exception ex)
         {
@@ -554,13 +569,61 @@ public sealed class MainViewModel : ObservableObject
             await Task.Delay(1200);
             await RefreshMediaNavigationAsync();
             await RefreshBluRayTitlesAsync();
-            StatusText = $"Blu-ray title {title.DisplayNumber} is playing.";
+            StatusText = _playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped
+                ? FormatBluRayFailure(_playback.LastPlaybackError)
+                : $"Blu-ray title {title.DisplayNumber} is playing.";
         }
         catch (Exception ex)
         {
             StatusText = $"Blu-ray title {title.DisplayNumber} could not be opened.";
             await _logger.ErrorAsync(StatusText, ex);
         }
+    }
+
+
+    private bool EnsureAacsConfigurationReady()
+    {
+        var keyDb = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "aacs",
+            "KEYDB.cfg");
+
+        string? message = null;
+        if (!File.Exists(keyDb))
+        {
+            message = $"KEYDB.cfg was not found.\n\nExpected location:\n{keyDb}\n\nAdd valid AACS configuration for a Blu-ray you own, then try again.";
+            StatusText = $"Protected Blu-ray requires AACS configuration. KEYDB.cfg was not found at {keyDb}.";
+        }
+        else if (new FileInfo(keyDb).Length == 0)
+        {
+            message = $"KEYDB.cfg was found, but it is empty.\n\nLocation:\n{keyDb}\n\nAdd valid AACS configuration for a Blu-ray you own, then try again.";
+            StatusText = "KEYDB.cfg was found, but it is empty. This protected Blu-ray needs matching AACS configuration.";
+        }
+
+        if (message is null)
+            return true;
+
+        MessageBox.Show(
+            message,
+            "Protected Blu-ray cannot be opened",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+        return false;
+    }
+
+    private static string FormatBluRayFailure(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            return "Blu-ray loading failed. Open the Parallax Studio log for details.";
+
+        if (error.Contains("no matching processing key", StringComparison.OrdinalIgnoreCase))
+            return "Protected Blu-ray could not be opened: KEYDB.cfg has no matching processing key for this disc.";
+        if (error.Contains("missing config file", StringComparison.OrdinalIgnoreCase))
+            return "Protected Blu-ray could not be opened: the AACS KEYDB.cfg file is missing.";
+        if (error.Contains("certificate", StringComparison.OrdinalIgnoreCase))
+            return "Protected Blu-ray could not be opened: libaacs could not obtain the required certificate or key.";
+
+        return $"Blu-ray loading failed: {error}";
     }
 
     private async Task RefreshBluRayTitlesAsync()

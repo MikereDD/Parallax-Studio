@@ -73,3 +73,23 @@
 - Add `build.ps1 -Bootstrap` and optional 7-Zip installation support.
 - Keep libdvdcss and libaacs optional and user-supplied.
 - Record resolved archive and DLL SHA-256 values in a generated lock file.
+
+## v1.0-dev.5.1.4.1
+
+- Show a visible modal warning when Blu-ray playback is blocked by a missing or empty AACS `KEYDB.cfg`.
+- Apply the same readiness warning to both main-feature playback and title browsing.
+- Keep the detailed reason in the persistent playback status text.
+
+## v1.0-dev.5.1.4
+
+- Added Blu-ray readiness checks for missing or empty `KEYDB.cfg`.
+- Surface libmpv/AACS failures in the app status bar, including no matching processing key.
+- Stop logging Blu-ray requests as opened before libmpv confirms successful loading.
+- Preserve detailed native-library and libmpv diagnostics.
+
+## v1.0-dev.5.1.3
+
+- Capture libmpv log messages and asynchronous load failures.
+- Log Blu-ray source, drive, native disc libraries, and AACS key database presence.
+- Surface failed Blu-ray loads in the player status bar.
+- Correct diagnostics path documentation to `%LOCALAPPDATA%\ParallaxStudio\logs`.

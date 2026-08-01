@@ -1,20 +1,7 @@
-# Parallax Studio v1.0-dev.5.1.2 Test
+# Parallax Studio v1.0-dev.5.1.4.1 Visible AACS Warning Hotfix
 
-## Fresh native dependency bootstrap
-
-Leave `native\` empty except for `README.md`, then run:
-
-```powershell
-.\build.ps1 -Bootstrap -InstallBootstrapTools -Run
-```
-
-Confirm the bootstrap reports and installs:
-
-- `libmpv-2.dll`
-- `libaacs.dll` (optional; warning-only if unavailable)
-- `libbdplus.dll` (optional; warning-only if unavailable)
-- `libdvdcss-2.dll` (optional; warning-only if unavailable)
-
-Then test Blu-ray detection, main-feature playback, Browse Titles, Tracks, subtitles, chapters, and clean shutdown.
-
-`libaacs` and `libbdplus` do not include disc keys. Protected discs may still require a user-supplied AACS configuration.
+1. Run `./build.ps1 -Bootstrap -InstallBootstrapTools -Run`.
+2. Keep `%APPDATA%\aacs\KEYDB.cfg` empty.
+3. Press **Play main feature**.
+4. Confirm a visible warning dialog appears describing the empty KEYDB file.
+5. Press **Browse titles** and confirm the same readiness warning appears.

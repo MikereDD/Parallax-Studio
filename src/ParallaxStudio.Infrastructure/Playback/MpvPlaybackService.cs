@@ -21,6 +21,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     public PlaybackSnapshot Snapshot { get; private set; } = PlaybackSnapshot.Disconnected();
     public bool IsInitialized => _context != nint.Zero;
     public string BackendDescription { get; private set; } = "libmpv not checked";
+    public string? LastPlaybackError { get; private set; }
 
     public async Task<PlaybackBackendStatus> ProbeAsync(CancellationToken cancellationToken = default)
     {
@@ -69,6 +70,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 _library.SetOption(_context, "input-default-bindings", "no");
                 _library.SetOption(_context, "input-vo-keyboard", "no");
                 _library.Initialize(_context);
+                _library.RequestLogMessages(_context, "info");
                 _library.SetProperty(_context, "volume", Snapshot.Volume.ToString("0.##", CultureInfo.InvariantCulture));
 
                 BackendDescription = _library.GetClientApiVersion();
@@ -123,6 +125,9 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             throw new InvalidOperationException("The Blu-ray drive is not ready.");
 
         var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        LastPlaybackError = null;
+        await logger.InfoAsync($"Blu-ray request: source=bd://longest, device={device}, label={disc.DisplayName}.", cancellationToken).ConfigureAwait(false);
+        await LogNativeDiscLibrariesAsync(cancellationToken).ConfigureAwait(false);
         await WithInitializedContextAsync(context =>
         {
             SetSnapshot(Snapshot with
@@ -139,7 +144,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             _paused = false;
         }, cancellationToken).ConfigureAwait(false);
 
-        await logger.InfoAsync($"Opened Blu-ray main feature from {device}.", cancellationToken).ConfigureAwait(false);
+        await logger.InfoAsync($"Submitted Blu-ray main-feature request for {device}.", cancellationToken).ConfigureAwait(false);
     }
 
     public async Task OpenBluRayTitleAsync(DiscSource disc, int titleIndex, CancellationToken cancellationToken = default)
@@ -153,6 +158,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             throw new ArgumentOutOfRangeException(nameof(titleIndex));
 
         var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        LastPlaybackError = null;
         await WithInitializedContextAsync(context =>
         {
             SetSnapshot(Snapshot with
@@ -169,7 +175,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             _paused = false;
         }, cancellationToken).ConfigureAwait(false);
 
-        await logger.InfoAsync($"Opened Blu-ray title {titleIndex + 1} from {device}.", cancellationToken).ConfigureAwait(false);
+        await logger.InfoAsync($"Submitted Blu-ray title {titleIndex + 1} request for {device}.", cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(CancellationToken cancellationToken = default)
@@ -342,10 +348,13 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         {
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
+                List<MpvDiagnosticEvent> diagnosticEvents = [];
                 await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
                     if (!IsInitialized) continue;
+
+                    diagnosticEvents.AddRange(_library.DrainEvents(_context));
 
                     var position = ParseSeconds(_library.GetProperty(_context, "time-pos"));
                     var duration = ParseSeconds(_library.GetProperty(_context, "duration"));
@@ -362,6 +371,9 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                             : _paused ? PlaybackState.Paused : PlaybackState.Playing;
                     }
 
+                    var failed = diagnosticEvents.LastOrDefault(item => item.Kind == "end-file" && item.Level == "error");
+                    if (failed is not null) state = PlaybackState.Faulted;
+
                     var next = Snapshot with
                     {
                         State = state,
@@ -374,18 +386,47 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
-                    await logger.WarningAsync($"Playback property polling skipped: {ex.Message}", cancellationToken)
-                        .ConfigureAwait(false);
+                    await logger.WarningAsync($"Playback polling failed: {ex.Message}", cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
                     _gate.Release();
+                }
+
+                foreach (var item in diagnosticEvents)
+                {
+                    var message = $"mpv[{item.Prefix}/{item.Level}] {item.Message}";
+                    if (item.Level is "error" or "fatal")
+                    {
+                        LastPlaybackError = item.Message;
+                        await logger.ErrorAsync(message, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    }
+                    else if (item.Level is "warn" or "warning")
+                        await logger.WarningAsync(message, cancellationToken).ConfigureAwait(false);
+                    else
+                        await logger.InfoAsync(message, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+    }
+
+
+    private async Task LogNativeDiscLibrariesAsync(CancellationToken cancellationToken)
+    {
+        var baseDirectory = AppContext.BaseDirectory;
+        foreach (var file in new[] { "libmpv-2.dll", "libaacs.dll", "libbdplus.dll", "libdvdcss-2.dll" })
+        {
+            var path = Path.Combine(baseDirectory, file);
+            await logger.InfoAsync($"Native library {file}: {(File.Exists(path) ? path : "not present in output directory")}", cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var keyDb = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "aacs", "KEYDB.cfg");
+        await logger.InfoAsync($"AACS key database: {(File.Exists(keyDb) ? keyDb : "not present")}", cancellationToken)
+            .ConfigureAwait(false);
     }
 
 

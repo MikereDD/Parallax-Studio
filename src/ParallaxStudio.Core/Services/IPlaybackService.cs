@@ -10,6 +10,7 @@ public interface IPlaybackService : IAsyncDisposable
     PlaybackSnapshot Snapshot { get; }
     bool IsInitialized { get; }
     string BackendDescription { get; }
+    string? LastPlaybackError { get; }
 
     Task<PlaybackBackendStatus> ProbeAsync(CancellationToken cancellationToken = default);
     Task InitializeAsync(nint windowHandle, CancellationToken cancellationToken = default);
