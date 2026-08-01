@@ -1,3 +1,14 @@
+## 1.0-dev.5.3.1.1
+
+- Fixed WPF DataTemplate trigger placement in the polished audio, subtitle, and chapter cards so the presentation pass compiles correctly.
+
+## 1.0-dev.5.3.1
+
+- Refined audio and subtitle labels into readable language, codec, channel, and role descriptions.
+- Added stronger active-track highlighting with a dedicated ACTIVE badge.
+- Added polished chapter rows with compact timestamps and a NOW PLAYING badge.
+- Preserved live Blu-ray audio, subtitle, and chapter selection behavior.
+
 ## 1.0-dev.5.3
 
 - Automatically stages MakeMKV `libmmbd64.dll` as runtime `libaacs.dll` and `libbdplus.dll` after each successful build.
