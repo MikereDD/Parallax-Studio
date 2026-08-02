@@ -92,8 +92,9 @@ public sealed record MediaTrack(
             "eac3" or "e-ac-3" => "Dolby Digital Plus",
             "ac3" or "ac-3" => "Dolby Digital",
             "aac" => "AAC",
+            "mp2" or "mp3" or "mpga" => "MPEG Audio",
             "flac" => "FLAC",
-            "pcm-bluray" or "pcm-s16le" or "pcm-s24le" => "PCM",
+            "pcm-dvd" or "pcm-bluray" or "pcm-s16le" or "pcm-s24le" => "PCM",
             "hdmv-pgs-subtitle" => "PGS Subtitle",
             "dvd-subtitle" => "DVD Subtitle",
             "subrip" => "SRT Subtitle",
@@ -107,8 +108,8 @@ public sealed record MediaTrack(
         var normalized = details.Trim().ToLowerInvariant();
         return normalized switch
         {
-            "stereo" => "Stereo",
-            "mono" => "Mono",
+            "stereo" or "2.0" => "Stereo",
+            "mono" or "1.0" => "Mono",
             "5.1(side)" or "5.1" => "5.1",
             "7.1" => "7.1",
             _ => details.Trim()

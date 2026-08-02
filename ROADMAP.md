@@ -1,3 +1,10 @@
+## Current optical-media milestone — v1.0-dev.5.5.3.1
+
+- DVD longest-title playback and direct numbered-title selection.
+- DVD episode/bonus discovery with serialized drive access and cancellation.
+- Audio, subtitle, and chapter parity with Blu-ray.
+- Interactive DVD menus remain deferred until direct playback is proven reliable.
+
 # Parallax Studio Roadmap
 
 Parallax Studio uses its own version line. Development builds remain under the

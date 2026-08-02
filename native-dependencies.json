@@ -40,12 +40,16 @@
       "id": "libdvdcss",
       "required": false,
       "architecture": "x64",
-      "version": "1.2.12",
-      "downloadUrl": "https://download.videolan.org/pub/libdvdcss/1.2.12/win64/libdvdcss-2.dll",
+      "version": "1.5.0",
+      "packageName": "mingw-w64-x86_64-libdvdcss-1.5.0-1-any.pkg.tar.zst",
+      "downloadUrl": "https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-libdvdcss-1.5.0-1-any.pkg.tar.zst",
+      "packageSha256": "3e2263c265511a1087a71fdbb551475b14ac82893a9455269b2efa8f23f6b962",
+      "packageMember": "mingw64/bin/libdvdcss-2.dll",
       "outputFile": "libdvdcss-2.dll",
-      "distribution": "bootstrap-download-optional",
-      "archiveType": "dll",
-      "sourceProject": "VideoLAN/libdvdcss"
+      "distribution": "bootstrap-download-optional-package",
+      "archiveType": "pkg.tar.zst",
+      "sourceProject": "VideoLAN/libdvdcss",
+      "binaryPackager": "MSYS2"
     }
   ]
 }

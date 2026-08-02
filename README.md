@@ -1,10 +1,10 @@
-# Parallax Studio v1.0-dev.5.4.2.1
+# Parallax Studio v1.0-dev.5.5.3.1
 
 A premium-direction foundation test for the cinematic player in the **Typezer∅ Studio Suite**. The original PowerShell/WinForms Parallax remains a separate stable application and is not replaced by this project.
 
 ## This test build
 
-This test focuses on responsive, serialized Blu-ray title discovery. Fresh title scans no longer auto-play the disc, MakeMKV discovery and libmpv disc opens are serialized, scanning is cancellable, results are applied in one UI batch, and optical-media swaps are detected automatically.
+This test adds the DVD playback foundation on top of the validated Blu-ray path. DVDs can play their longest title directly, expose numbered titles for episode and bonus-feature selection, reuse audio/subtitle/chapter navigation, and share the responsive serialized discovery and automatic disc-swap architecture.
 
 The build combines the existing native libmpv foundation with the Studio Suite visual system established by Cadence Studio. It includes live selection of all six approved themes and the three typography profiles, the official Parallax icon, a redesigned cinematic shell, file-open/playback controls, fullscreen routing, optical-drive discovery, independent settings, logging, and resume-store foundations.
 
@@ -177,9 +177,9 @@ A one-command explicit bootstrap is also available:
 The first successful bootstrap writes `native-dependencies.lock.json` containing the resolved archive and DLL SHA-256 values. Future verification uses that lock file. Optional disc libraries remain user-supplied.
 
 
-## Blu-ray foundation
+## Optical-disc foundation
 
-Insert a Blu-ray, select **Scan**, then **Play Blu-ray**. This first slice uses libmpv/libbluray direct main-feature playback (`bd://longest`) and intentionally does not bundle or download AACS keys.
+Blu-rays use libmpv/libbluray direct playback (`bd://longest`) with MakeMKV LibMMBD when available. DVDs use libmpv direct playback (`dvd://`) with pinned libdvdcss 1.5.0 for CSS-protected media. Every DVD source is first opened in an isolated helper process so a native DVD backend failure cannot terminate the Parallax Studio UI. Interactive DVD menus remain deferred.
 
 
 ## Native disc libraries
@@ -198,3 +198,8 @@ Run:
 ```
 
 Optional libraries never make the normal build fail. The bootstrap records downloaded file hashes in `native-dependencies.lock.json`. No decryption keys are included or downloaded.
+
+
+### DVD process isolation
+
+DVD playback runs in a dedicated child process and communicates with the Parallax Studio UI over a private named pipe. This keeps native DVD backend failures from terminating the main application.

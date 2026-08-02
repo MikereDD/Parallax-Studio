@@ -151,20 +151,69 @@ try {
         foreach ($dep in @($aacs,$bdplus)) { Add-LockEntry -Entries $lockEntries -Dependency $dep -SourceUrl $dep.releaseApiUrl -ArchivePath $null }
     }
 
-    # Official VideoLAN x64 libdvdcss binary for later DVD support.
+    # Current x64 libdvdcss, built from VideoLAN 1.5.0 source by the MSYS2 CI packager.
+    # The previous 1.2.12 Windows binary predates multiple upstream crash fixes.
     $dvdcss = $manifest.dependencies | Where-Object id -eq 'libdvdcss' | Select-Object -First 1
     $dvdTarget = Join-Path $native $dvdcss.outputFile
-    if ($Force -or -not (Test-Path -LiteralPath $dvdTarget)) {
+    $lockedDvdVersion = $null
+    if (Test-Path -LiteralPath $lockPath) {
         try {
-            Write-Host "Downloading optional $($dvdcss.outputFile)..." -ForegroundColor Cyan
-            Invoke-Download -Uri $dvdcss.downloadUrl -OutFile $dvdTarget
-            Write-Host "Installed $($dvdcss.outputFile)." -ForegroundColor Green
+            $previousLock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+            $lockedDvdVersion = ($previousLock.dependencies | Where-Object id -eq 'libdvdcss' | Select-Object -First 1).version
         } catch {
+            Write-BootstrapLog "Unable to read previous native lock for libdvdcss version check: $($_.Exception.Message)"
+        }
+    }
+    $needDvdCss = $Force -or -not (Test-Path -LiteralPath $dvdTarget) -or $lockedDvdVersion -ne $dvdcss.version
+    $dvdArchive = Join-Path $cache $dvdcss.packageName
+    $dvdCssReady = -not $needDvdCss
+    if ($needDvdCss) {
+        try {
+            $sevenZipPath = Resolve-SevenZip
+            if (-not $sevenZipPath) { throw '7-Zip is required to extract the libdvdcss package.' }
+            if ($Force -or -not (Test-Path -LiteralPath $dvdArchive)) {
+                Write-Host "Downloading libdvdcss $($dvdcss.version) package..." -ForegroundColor Cyan
+                Invoke-Download -Uri $dvdcss.downloadUrl -OutFile $dvdArchive
+            } else {
+                Write-Host "Using cached archive: $dvdArchive" -ForegroundColor DarkCyan
+            }
+
+            $packageHash = (Get-FileHash -LiteralPath $dvdArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($packageHash -ne ([string]$dvdcss.packageSha256).ToLowerInvariant()) {
+                Remove-Item -LiteralPath $dvdArchive -Force -ErrorAction SilentlyContinue
+                throw "libdvdcss package checksum mismatch. Expected $($dvdcss.packageSha256), received $packageHash."
+            }
+
+            $extractOuter = Join-Path $cache ('extract-dvdcss-outer-' + [guid]::NewGuid().ToString('N'))
+            $extractInner = Join-Path $cache ('extract-dvdcss-inner-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Force -Path $extractOuter, $extractInner | Out-Null
+            try {
+                & $sevenZipPath x $dvdArchive "-o$extractOuter" -y
+                if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to unpack the libdvdcss zstd layer (exit $LASTEXITCODE)." }
+                $tarFile = Get-ChildItem -LiteralPath $extractOuter -Filter '*.tar' -File -Recurse | Select-Object -First 1
+                if (-not $tarFile) { throw 'The libdvdcss package did not contain a tar archive.' }
+                & $sevenZipPath x $tarFile.FullName "-o$extractInner" -y
+                if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to unpack the libdvdcss tar layer (exit $LASTEXITCODE)." }
+                $dvdDll = Get-ChildItem -LiteralPath $extractInner -Filter $dvdcss.outputFile -File -Recurse | Select-Object -First 1
+                if (-not $dvdDll) { throw "The libdvdcss package did not contain $($dvdcss.outputFile)." }
+                Copy-Item -LiteralPath $dvdDll.FullName -Destination $dvdTarget -Force
+            } finally {
+                Remove-Item -LiteralPath $extractOuter, $extractInner -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            $dvdCssReady = $true
+            Write-Host "Installed libdvdcss $($dvdcss.version)." -ForegroundColor Green
+        } catch {
+            $dvdCssReady = $false
+            Remove-Item -LiteralPath $dvdTarget -Force -ErrorAction SilentlyContinue
             Write-Warning "Optional DVD library was not installed: $($_.Exception.Message)"
             Write-BootstrapLog "Optional libdvdcss failure: $($_ | Out-String)"
         }
-    } else { Write-Host "$($dvdcss.outputFile) already present; leaving it unchanged." -ForegroundColor Green }
-    if (Test-Path -LiteralPath $dvdTarget) { Add-LockEntry -Entries $lockEntries -Dependency $dvdcss -SourceUrl $dvdcss.downloadUrl -ArchivePath $null }
+    } else {
+        Write-Host "libdvdcss $($dvdcss.version) already present; leaving it unchanged." -ForegroundColor Green
+    }
+    if ($dvdCssReady -and (Test-Path -LiteralPath $dvdTarget)) {
+        Add-LockEntry -Entries $lockEntries -Dependency $dvdcss -SourceUrl $dvdcss.downloadUrl -ArchivePath $dvdArchive
+    }
 
     [ordered]@{
         schemaVersion = 2

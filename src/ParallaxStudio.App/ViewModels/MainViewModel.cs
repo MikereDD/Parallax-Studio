@@ -43,10 +43,10 @@ public sealed class MainViewModel : ObservableObject
     private double _subtitleDelay;
     private string _mediaDetailsText = "No media metadata loaded";
     private bool _isBluRayPanelOpen;
-    private DiscSource? _activeBluRayDisc;
+    private DiscSource? _activeDisc;
     private bool _isRefreshingMediaNavigation;
     private bool _isBluRayTitleDiscoveryBusy;
-    private string _bluRayTitleSummary = "Open a Blu-ray to discover its playlists and extras.";
+    private string _bluRayTitleSummary = "Select a Blu-ray or DVD to discover titles, episodes, playlists, and extras.";
     private BluRayTitle? _selectedBluRayTitle;
     private readonly SemaphoreSlim _discScanGate = new(1, 1);
     private readonly CancellationTokenSource _discWatchCancellation = new();
@@ -78,8 +78,8 @@ public sealed class MainViewModel : ObservableObject
 
         OpenCommand = new AsyncRelayCommand(OpenAsync);
         ScanDiscsCommand = new AsyncRelayCommand(ScanDiscsAsync);
-        PlayDiscCommand = new AsyncRelayCommand<DiscSource>(PlayDiscAsync, disc => disc is { IsReady: true, Kind: DiscKind.BluRay });
-        BrowseDiscTitlesCommand = new AsyncRelayCommand<DiscSource>(BrowseDiscTitlesAsync, disc => disc is { IsReady: true, Kind: DiscKind.BluRay });
+        PlayDiscCommand = new AsyncRelayCommand<DiscSource>(PlayDiscAsync, disc => disc is { IsReady: true } && (disc.Kind == DiscKind.BluRay || disc.Kind == DiscKind.Dvd));
+        BrowseDiscTitlesCommand = new AsyncRelayCommand<DiscSource>(BrowseDiscTitlesAsync, disc => disc is { IsReady: true } && (disc.Kind == DiscKind.BluRay || disc.Kind == DiscKind.Dvd));
         PlayBluRayTitleCommand = new AsyncRelayCommand<BluRayTitle>(PlayBluRayTitleAsync);
         CancelBluRayTitleDiscoveryCommand = _cancelBluRayTitleDiscoveryCommand;
         ToggleBluRayPanelCommand = new RelayCommand(ToggleBluRayPanel);
@@ -484,6 +484,12 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task<bool> RefreshMediaNavigationAsync()
     {
+        if (_playback.Snapshot.State == PlaybackState.Loading)
+        {
+            await _logger.InfoAsync("Deferred media-navigation refresh while the selected title is still loading.");
+            return false;
+        }
+
         var tracks = await _playback.GetTracksAsync();
         var chapters = await _playback.GetChaptersAsync();
 
@@ -534,8 +540,14 @@ public sealed class MainViewModel : ObservableObject
     {
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
-            if (await RefreshMediaNavigationAsync()) return true;
             if (_playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped) return false;
+            if (_playback.Snapshot.State == PlaybackState.Loading)
+            {
+                await Task.Delay(delayMilliseconds);
+                continue;
+            }
+
+            if (await RefreshMediaNavigationAsync()) return true;
             await Task.Delay(delayMilliseconds);
         }
         return false;
@@ -598,31 +610,61 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             CancelBluRayTitleDiscovery();
-            _activeBluRayDisc = disc;
-            StatusText = $"Opening Blu-ray from {disc.DriveRoot}...";
+            _activeDisc = disc;
+            StatusText = $"Opening {disc.KindLabel} from {disc.DriveRoot}...";
             IsTracksPanelOpen = false;
             IsBluRayPanelOpen = false;
-            if (!EnsureAacsConfigurationReady())
-                return;
 
-            await _playback.OpenBluRayAsync(disc);
-            StatusText = "Blu-ray main feature is loading...";
+            if (disc.Kind == DiscKind.BluRay)
+            {
+                if (!EnsureAacsConfigurationReady())
+                    return;
+                await _playback.OpenBluRayAsync(disc);
+                StatusText = "Blu-ray main feature is loading...";
+            }
+            else if (disc.Kind == DiscKind.Dvd)
+            {
+                await _playback.OpenDvdAsync(disc);
+                StatusText = "DVD longest title is loading...";
+            }
+            else
+            {
+                StatusText = "This optical-disc type is not yet playable.";
+                return;
+            }
+
             var navigationReady = await RefreshMediaNavigationWithRetryAsync();
             if (_playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped)
             {
-                StatusText = FormatBluRayFailure(_playback.LastPlaybackError);
+                StatusText = disc.Kind == DiscKind.BluRay
+                    ? FormatBluRayFailure(_playback.LastPlaybackError)
+                    : FormatDvdFailure(_playback.LastPlaybackError);
             }
             else
             {
                 StatusText = navigationReady
-                    ? "Blu-ray playback active. Audio, subtitles, and chapters are ready in Tracks."
-                    : "Blu-ray playback active. Track metadata is still loading; open Tracks to refresh.";
+                    ? $"{disc.KindLabel} playback active. Audio, subtitles, and chapters are ready in Tracks."
+                    : $"{disc.KindLabel} playback active. Track metadata is still loading; open Tracks to refresh.";
             }
         }
         catch (Exception ex)
         {
-            StatusText = "Blu-ray could not be opened. The disc may require AACS keys or unsupported protection.";
-            await _logger.ErrorAsync($"Could not open Blu-ray from {disc.DriveRoot}", ex);
+            if (disc.Kind == DiscKind.Dvd && ex.Message.Contains("isolated native probe failed", StringComparison.OrdinalIgnoreCase))
+            {
+                StatusText = ex.Message;
+                MessageBox.Show(
+                    ex.Message,
+                    "DVD playback safety check failed",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            else
+            {
+                StatusText = disc.Kind == DiscKind.BluRay
+                    ? "Blu-ray could not be opened. The disc may require AACS keys or unsupported protection."
+                    : "DVD could not be opened. Check libdvdcss availability and the playback log.";
+            }
+            await _logger.ErrorAsync($"Could not open {disc.KindLabel} from {disc.DriveRoot}", ex);
         }
     }
 
@@ -632,10 +674,10 @@ public sealed class MainViewModel : ObservableObject
         IsTracksPanelOpen = false;
         IsBluRayPanelOpen = true;
 
-        var sameDisc = _activeBluRayDisc is not null &&
-            string.Equals(GetDiscIdentity(_activeBluRayDisc), GetDiscIdentity(disc), StringComparison.Ordinal);
+        var sameDisc = _activeDisc is not null &&
+            string.Equals(GetDiscIdentity(_activeDisc), GetDiscIdentity(disc), StringComparison.Ordinal);
 
-        _activeBluRayDisc = disc;
+        _activeDisc = disc;
 
         // Reopening a completed browser is instant and never touches the physical drive.
         if (sameDisc && BluRayTitles.Count > 0)
@@ -645,15 +687,14 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        if (!EnsureAacsConfigurationReady())
+        if (disc.Kind == DiscKind.BluRay && !EnsureAacsConfigurationReady())
             return;
 
-        var bluRayPlaybackActive = _playback.Snapshot.Source?.StartsWith(
-            "Blu-ray disc",
-            StringComparison.OrdinalIgnoreCase) == true &&
+        var discPlaybackActive = (_playback.Snapshot.Source?.StartsWith("Blu-ray disc", StringComparison.OrdinalIgnoreCase) == true ||
+                                  _playback.Snapshot.Source?.StartsWith("DVD disc", StringComparison.OrdinalIgnoreCase) == true) &&
             (_playback.Snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused);
 
-        if (bluRayPlaybackActive)
+        if (discPlaybackActive)
         {
             StatusText = "Stopping disc playback before title discovery to prevent optical-drive contention...";
             await _playback.StopAsync();
@@ -671,24 +712,24 @@ public sealed class MainViewModel : ObservableObject
             SelectedBluRayTitle = null;
             BluRayTitleSummary =
                 $"Scanning {CleanDiscDisplayName(disc)} without starting playback. Parallax remains responsive, and you can cancel at any time.";
-            StatusText = $"Discovering Blu-ray titles on {disc.DriveRoot}. Playback is paused until you choose a title...";
+            StatusText = $"Discovering {disc.KindLabel} titles on {disc.DriveRoot}. Playback will begin only after you choose a title...";
 
             await RefreshBluRayTitlesAsync(cancellationToken: discoveryCancellation.Token);
 
             StatusText = BluRayTitles.Count == 0
-                ? "No title metadata was reported. Main-feature playback remains available."
-                : $"Found {BluRayTitles.Count} Blu-ray title{(BluRayTitles.Count == 1 ? string.Empty : "s")}. Select one to begin playback.";
+                ? $"No {disc.KindLabel} title metadata was reported. Direct playback remains available."
+                : $"Found {BluRayTitles.Count} {disc.KindLabel} title{(BluRayTitles.Count == 1 ? string.Empty : "s")}. Select one to begin playback.";
         }
         catch (OperationCanceledException) when (discoveryCancellation.IsCancellationRequested)
         {
-            BluRayTitleSummary = "Title discovery was cancelled. Choose Browse titles to try again, or play the main feature directly.";
-            StatusText = "Blu-ray title discovery cancelled.";
+            BluRayTitleSummary = "Title discovery was cancelled. Choose Browse titles to try again, or play the disc directly.";
+            StatusText = $"{disc.KindLabel} title discovery cancelled.";
         }
         catch (Exception ex)
         {
-            StatusText = "Blu-ray titles could not be read. Check the playback log for details.";
-            BluRayTitleSummary = "Title discovery failed. The playback log contains the MakeMKV details.";
-            await _logger.ErrorAsync($"Could not browse Blu-ray titles from {disc.DriveRoot}", ex);
+            StatusText = $"{disc.KindLabel} titles could not be read. Check the playback log for details.";
+            BluRayTitleSummary = "Title discovery failed. The playback log contains the discovery details.";
+            await _logger.ErrorAsync($"Could not browse {disc.KindLabel} titles from {disc.DriveRoot}", ex);
         }
         finally
         {
@@ -704,11 +745,11 @@ public sealed class MainViewModel : ObservableObject
     private async Task PlayBluRayTitleAsync(BluRayTitle? title)
     {
         title ??= SelectedBluRayTitle;
-        if (title is null || _activeBluRayDisc is null) return;
+        if (title is null || _activeDisc is null) return;
 
         if (title.IsActive)
         {
-            StatusText = $"Blu-ray title {title.DisplayNumber} is already playing.";
+            StatusText = $"{_activeDisc.KindLabel} title {title.DisplayNumber} is already playing.";
             return;
         }
 
@@ -717,22 +758,42 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             SelectedBluRayTitle = title;
-            StatusText = $"Switching to Blu-ray title {title.DisplayNumber}...";
+            StatusText = $"Switching to {_activeDisc.KindLabel} title {title.DisplayNumber}...";
             BluRayTitleSummary = $"Loading Title {title.DisplayNumber} — {title.DurationText}. Track and chapter metadata will refresh automatically.";
-            await _playback.OpenBluRayTitleAsync(_activeBluRayDisc, title.Index);
+
+            if (_activeDisc.Kind == DiscKind.BluRay)
+                await _playback.OpenBluRayTitleAsync(_activeDisc, title.Index);
+            else if (_activeDisc.Kind == DiscKind.Dvd)
+                await _playback.OpenDvdTitleAsync(_activeDisc, title.Index);
+            else
+                throw new InvalidOperationException("This optical-disc type does not support direct title playback.");
+
             await RefreshMediaNavigationWithRetryAsync();
             await RefreshBluRayTitlesWithRetryAsync(title.Index); // uses the per-disc cache; no physical rescan
             StatusText = _playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped
-                ? FormatBluRayFailure(_playback.LastPlaybackError)
-                : $"Blu-ray title {title.DisplayNumber} is playing. Tracks, subtitles, chapters, duration, and timeline were refreshed.";
+                ? _activeDisc.Kind == DiscKind.BluRay
+                    ? FormatBluRayFailure(_playback.LastPlaybackError)
+                    : FormatDvdFailure(_playback.LastPlaybackError)
+                : $"{_activeDisc.KindLabel} title {title.DisplayNumber} is playing. Tracks, subtitles, chapters, duration, and timeline were refreshed.";
         }
         catch (Exception ex)
         {
-            StatusText = $"Blu-ray title {title.DisplayNumber} could not be opened.";
+            if (_activeDisc.Kind == DiscKind.Dvd && ex.Message.Contains("isolated native probe failed", StringComparison.OrdinalIgnoreCase))
+            {
+                StatusText = ex.Message;
+                MessageBox.Show(
+                    ex.Message,
+                    "DVD playback safety check failed",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            else
+            {
+                StatusText = $"{_activeDisc.KindLabel} title {title.DisplayNumber} could not be opened.";
+            }
             await _logger.ErrorAsync(StatusText, ex);
         }
     }
-
 
     private bool EnsureAacsConfigurationReady()
     {
@@ -785,21 +846,35 @@ public sealed class MainViewModel : ObservableObject
         return $"Blu-ray loading failed: {error}";
     }
 
+    private static string FormatDvdFailure(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            return "DVD loading failed. Open the Parallax Studio log for details.";
+        if (error.Contains("css", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("encrypted", StringComparison.OrdinalIgnoreCase))
+            return "Protected DVD could not be opened. Verify that libdvdcss-2.dll is present in the app output.";
+        if (error.Contains("region", StringComparison.OrdinalIgnoreCase))
+            return "DVD loading failed because the drive or disc reported a region restriction.";
+        return $"DVD loading failed: {error}";
+    }
+
     private async Task RefreshBluRayTitlesAsync(
         int? preferredSelectionIndex = null,
         CancellationToken cancellationToken = default)
     {
-        var disc = _activeBluRayDisc;
+        var disc = _activeDisc;
         if (disc is null)
         {
             BluRayTitles.Clear();
             SelectedBluRayTitle = null;
-            BluRayTitleSummary = "No Blu-ray disc is selected.";
+            BluRayTitleSummary = "No optical disc is selected.";
             return;
         }
 
         var selectionIndex = preferredSelectionIndex ?? SelectedBluRayTitle?.Index;
-        var titles = await _playback.GetBluRayTitlesAsync(disc, cancellationToken);
+        var titles = disc.Kind == DiscKind.Dvd
+            ? await _playback.GetDvdTitlesAsync(disc, cancellationToken)
+            : await _playback.GetBluRayTitlesAsync(disc, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         // Apply one completed batch. Avoid hundreds of incremental WPF layout passes.
@@ -808,7 +883,7 @@ public sealed class MainViewModel : ObservableObject
         if (titles.Count == 0)
         {
             SelectedBluRayTitle = null;
-            BluRayTitleSummary = "No title metadata was reported. Main-feature playback can still be used.";
+            BluRayTitleSummary = "No title metadata was reported. Direct disc playback can still be used.";
             return;
         }
 
@@ -819,11 +894,14 @@ public sealed class MainViewModel : ObservableObject
 
         var active = titles.FirstOrDefault(title => title.IsActive);
         var main = titles.FirstOrDefault(title => title.IsLikelyMainFeature);
+        var episodeCount = titles.Count(title => title.IsLikelyEpisode);
         BluRayTitleSummary = active is not null
             ? $"{titles.Count} titles discovered. Title {active.DisplayNumber} is playing at {active.DurationText}."
-            : main is null
-                ? $"{titles.Count} titles discovered. Select any title to play it directly."
-                : $"{titles.Count} titles discovered. Title {main.DisplayNumber} is the strongest main-feature candidate at {main.DurationText}.";
+            : episodeCount >= 2
+                ? $"{titles.Count} titles discovered, including {episodeCount} episode-length candidates. Select any title to play it directly."
+                : main is null
+                    ? $"{titles.Count} titles discovered. Select any title to play it directly."
+                    : $"{titles.Count} titles discovered. Title {main.DisplayNumber} is the strongest feature candidate at {main.DurationText}.";
     }
 
     private async Task RefreshBluRayTitlesWithRetryAsync(
@@ -852,7 +930,7 @@ public sealed class MainViewModel : ObservableObject
         var cancellation = _bluRayDiscoveryCancellation;
         if (cancellation is null || cancellation.IsCancellationRequested) return;
         BluRayTitleSummary = "Cancelling title discovery and releasing the optical drive...";
-        StatusText = "Cancelling Blu-ray title discovery...";
+        StatusText = "Cancelling optical-disc title discovery...";
         cancellation.Cancel();
     }
 
@@ -916,7 +994,7 @@ public sealed class MainViewModel : ObservableObject
         var previousSnapshotKey = _discSnapshotKey;
         var mediaChanged = !string.IsNullOrWhiteSpace(previousSnapshotKey) &&
             !string.Equals(previousSnapshotKey, snapshotKey, StringComparison.Ordinal);
-        var previousActiveDisc = _activeBluRayDisc;
+        var previousActiveDisc = _activeDisc;
 
         Discs.Clear();
         foreach (var disc in discs) Discs.Add(disc);
@@ -934,11 +1012,11 @@ public sealed class MainViewModel : ObservableObject
                 !string.Equals(GetDiscIdentity(previousActiveDisc), GetDiscIdentity(replacement), StringComparison.Ordinal))
             {
                 CancelBluRayTitleDiscovery();
-                _activeBluRayDisc = null;
+                _activeDisc = null;
                 BluRayTitles.Clear();
                 SelectedBluRayTitle = null;
                 IsBluRayPanelOpen = false;
-                BluRayTitleSummary = "The previous disc was removed. Insert a Blu-ray and choose Browse titles.";
+                BluRayTitleSummary = "The previous disc was removed. Insert a Blu-ray or DVD and choose Browse titles.";
             }
         }
 
@@ -959,7 +1037,7 @@ public sealed class MainViewModel : ObservableObject
                 ? "No optical drives detected. File playback remains available."
                 : readyDiscs.Length == 0
                     ? $"Found {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}. No disc is currently ready."
-                    : $"Found {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}. Insert a Blu-ray and choose Play or Browse titles.";
+                    : $"Found {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}. Insert a Blu-ray or DVD and choose Play or Browse titles.";
         }
     }
 

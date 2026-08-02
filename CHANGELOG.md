@@ -1,3 +1,41 @@
+## 1.0-dev.5.5.3.1 — Isolated DVD Host Build Hotfix
+
+- Fixed the `Task<MediaTrack[]>` to `Task<IReadOnlyList<MediaTrack>>` compile mismatch in the DVD host client.
+- Fixed the matching chapter-list return-type mismatch.
+- Preserved the isolated DVD playback-host implementation from v1.0-dev.5.5.3 unchanged for runtime testing.
+
+## 1.0-dev.5.5.3
+
+## 1.0-dev.5.5.3 — Isolated DVD Playback Host
+
+- Moved DVD playback out of the WPF process into `ParallaxStudio.DvdPlaybackHost.exe`.
+- Added named-pipe IPC for playback state, pause, stop, seeking, volume, mute, tracks, subtitles, and chapters.
+- Renders the isolated DVD engine into the existing Parallax video surface.
+- Preserves Blu-ray and local-file playback on the established in-process libmpv path.
+- Contains native DVD failures inside the child host so the main Parallax Studio window remains open.
+- Automatically terminates and replaces the DVD host when switching titles, media types, or closing the app.
+
+- Replaces the legacy 2013 libdvdcss 1.2.12 Windows binary with pinned libdvdcss 1.5.0 from the MSYS2 x64 package built from VideoLAN source.
+- Adds an isolated DVD runtime probe process so a native libmpv/DVD failure cannot terminate the Parallax Studio UI process.
+- Probes the exact longest-title or numbered-title URL before submitting it to the embedded player.
+- Shows a visible safety warning and preserves the app when the probe fails, including the native exit code in diagnostics.
+- Removes the experimental DVD edition-switch workaround; selected titles use the exact `dvd://N` source only after the isolated probe succeeds.
+
+## 1.0-dev.5.5.1
+
+- Replaced direct `dvd://N` selected-title loading with a two-stage safe DVD load followed by mpv `edition` selection.
+- Keeps playback state in Loading until the final DVD title is loaded and defers track/chapter polling during the transition.
+- Validates cached DVD title selection and hides aggregate navigation entries longer than 12 hours.
+- Uses real DVD title names when MakeMKV exposes them.
+
+- Adds direct DVD playback through libmpv using `dvd://` and the detected optical drive.
+- Adds direct numbered DVD-title playback with audio, subtitle, chapter, timeline, and fullscreen reuse.
+- Extends serialized, cancellable title discovery to DVDs through the installed MakeMKV command-line engine.
+- Adds DVD-aware title classification for episode-length programs, long features, bonus features, and short menu/intro items.
+- Keeps discovery from auto-starting playback and reuses per-disc cached title metadata.
+- Adds DVD-specific optical-card actions and corrects Blu-ray-only help/status text.
+- Verifies `libdvdcss-2.dll` in the runtime output after each successful build.
+
 ## 1.0-dev.5.4.2.1
 
 - Makes Blu-ray title discovery responsive by removing automatic playback from fresh title scans.

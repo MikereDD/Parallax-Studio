@@ -20,6 +20,9 @@ public interface IPlaybackService : IAsyncDisposable
     Task OpenBluRayAsync(DiscSource disc, CancellationToken cancellationToken = default);
     Task OpenBluRayTitleAsync(DiscSource disc, int titleIndex, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(DiscSource disc, CancellationToken cancellationToken = default);
+    Task OpenDvdAsync(DiscSource disc, CancellationToken cancellationToken = default);
+    Task OpenDvdTitleAsync(DiscSource disc, int titleIndex, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<BluRayTitle>> GetDvdTitlesAsync(DiscSource disc, CancellationToken cancellationToken = default);
     Task TogglePauseAsync(CancellationToken cancellationToken = default);
     Task StopAsync(CancellationToken cancellationToken = default);
     Task SeekRelativeAsync(double seconds, CancellationToken cancellationToken = default);

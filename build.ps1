@@ -48,7 +48,7 @@ if ($Bootstrap) {
     Write-Host 'Native dependency bootstrap completed.' -ForegroundColor Green
 }
 
-Write-Host "Building Parallax Studio v1.0-dev.5.4.2.1 ($Configuration)..." -ForegroundColor Cyan
+Write-Host "Building Parallax Studio v1.0-dev.5.5.3.1 ($Configuration)..." -ForegroundColor Cyan
 
 if ($Clean) {
     & dotnet clean $solution -c $Configuration
@@ -61,9 +61,33 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXIT
 & dotnet build $solution -c $Configuration --no-restore
 if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE." }
 
+# Stage the isolated DVD probe beside the app. A native DVD crash must terminate the
+# helper process rather than the Parallax Studio UI process.
+$appOutput = Join-Path $root "src\ParallaxStudio.App\bin\$Configuration\net10.0-windows\win-x64"
+$probeOutput = Join-Path $root "src\ParallaxStudio.DvdProbe\bin\$Configuration\net10.0-windows\win-x64"
+$probeRuntime = Join-Path $appOutput 'dvd-probe'
+if (-not (Test-Path -LiteralPath (Join-Path $probeOutput 'ParallaxStudio.DvdProbe.exe'))) {
+    throw "DVD safety probe build output was not found: $probeOutput"
+}
+Remove-Item -LiteralPath $probeRuntime -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $probeRuntime -Force | Out-Null
+Copy-Item -Path (Join-Path $probeOutput '*') -Destination $probeRuntime -Recurse -Force
+Write-Host "DVD safety probe staged: $probeRuntime" -ForegroundColor Green
+
+# Stage the isolated DVD playback host beside the app. DVD native failures stay
+# inside this child process instead of terminating the WPF application.
+$dvdHostOutput = Join-Path $root "src\ParallaxStudio.DvdPlaybackHost\bin\$Configuration\net10.0-windows\win-x64"
+$dvdHostRuntime = Join-Path $appOutput 'dvd-host'
+if (-not (Test-Path -LiteralPath (Join-Path $dvdHostOutput 'ParallaxStudio.DvdPlaybackHost.exe'))) {
+    throw "DVD playback host build output was not found: $dvdHostOutput"
+}
+Remove-Item -LiteralPath $dvdHostRuntime -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $dvdHostRuntime -Force | Out-Null
+Copy-Item -Path (Join-Path $dvdHostOutput '*') -Destination $dvdHostRuntime -Recurse -Force
+Write-Host "Isolated DVD playback host staged: $dvdHostRuntime" -ForegroundColor Green
+
 # Stage MakeMKV LibMMBD under the DLL names libbluray/libmpv requests on Windows.
 # The source native directory remains untouched; only this build output is changed.
-$appOutput = Join-Path $root "src\ParallaxStudio.App\bin\$Configuration\net10.0-windows\win-x64"
 $makeMkvCandidates = @(
     (Join-Path ${env:ProgramFiles(x86)} 'MakeMKV\libmmbd64.dll'),
     (Join-Path $env:ProgramFiles 'MakeMKV\libmmbd64.dll')
@@ -109,6 +133,16 @@ else {
 $nativeDll = Join-Path $root 'native\libmpv-2.dll'
 if (-not (Test-Path -LiteralPath $nativeDll)) {
     Write-Warning "libmpv-2.dll is missing. Run '.\build.ps1 -Bootstrap' to download it."
+}
+
+$runtimeDvdCss = Join-Path $appOutput 'libdvdcss-2.dll'
+if (Test-Path -LiteralPath $runtimeDvdCss) {
+    $dvdCssHash = (Get-FileHash -LiteralPath $runtimeDvdCss -Algorithm SHA256).Hash.ToLowerInvariant()
+    Write-Host "DVD CSS provider ready: $runtimeDvdCss" -ForegroundColor Green
+    Write-Host "  SHA-256: $dvdCssHash"
+}
+else {
+    Write-Warning 'libdvdcss-2.dll is missing from the app output. Unencrypted DVDs may still play, but CSS-protected DVDs can fail.'
 }
 
 if ($Run) {
