@@ -1,3 +1,10 @@
+## Unreleased
+
+- replaces the earlier app mark with the approved Parallax Studio cinematic `P` / play / film-strip icon
+- adds a 1024 px source raster, dedicated PNG sizes, and a multi-resolution Windows `.ico`
+- refreshes README, architecture, testing, roadmap, optical-media, native-runtime, and third-party documentation around the proven v1.0-dev.5.5.5 architecture
+- documents the local MakeMKV / LibMMBD boundary without treating locally staged MakeMKV binaries as Parallax-owned redistribution assets
+
 ## 1.0-dev.5.5.5 — Full DVD Title Map
 
 - probes the DVD edition table once before the first selected-title playback
@@ -13,7 +20,7 @@
 - Removes dependence on the short initial-load retry window that could expire before the UI consumed the mapping.
 - Logs `DVD reconciliation UI applied` when the verified mapping reaches the title panel.
 
-## 1.0-dev.5.5.4.2 — DVD Reconciliation UI Refresh Hotfix
+## 1.0-dev.5.5.4.1 — DVD Reconciliation UI Refresh Hotfix
 
 - Keeps title refresh polling alive while a DVD entry is still using the provisional numeric mapping.
 - Waits for the playback service to expose a verified runtime/chapter match before completing the title-switch workflow.

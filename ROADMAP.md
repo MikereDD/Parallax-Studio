@@ -1,23 +1,21 @@
-## Current optical-media milestone — v1.0-dev.5.5.5
-
-- Validate full-disc DVD title mapping across additional television and movie DVDs.
-
-- Reconcile MakeMKV DVD metadata with the program actually loaded by libdvdnav and keep the title browser refreshing until the verified match is visible.
-- Learn per-disc runtime/chapter mappings without risking the Parallax UI process.
-- Reuse verified mappings during later title selections in the same session.
-- Next: persist mappings and resolve still-unknown titles automatically.
-
-
-- DVD longest-title playback and direct numbered-title selection.
-- DVD episode/bonus discovery with serialized drive access and cancellation.
-- Audio, subtitle, and chapter parity with Blu-ray.
-- Interactive DVD menus remain deferred until direct playback is proven reliable.
-
 # Parallax Studio Roadmap
 
-Parallax Studio uses its own version line. Development builds remain under the
-`v1.0-dev.x` series until the modern application reaches validated feature parity
-and stability suitable for `v1.0`.
+Parallax Studio uses its own version line. Development builds remain under the `v1.0-dev.x` series until the modern application reaches validated feature parity and stability suitable for `v1.0`.
+
+## Current optical-media milestone — v1.0-dev.5.5.5
+
+- [x] Protected Blu-ray playback through locally installed MakeMKV LibMMBD when available
+- [x] MakeMKV-backed Blu-ray title discovery and direct title switching
+- [x] DVD playback isolated from the WPF process
+- [x] DVD title discovery with serialized drive access and cancellation
+- [x] Full-disc DVD title mapping by runtime instead of raw numeric assumptions
+- [x] Audio, subtitle, chapter, seek, volume, and fullscreen controls during disc playback
+- [x] Automatic optical-media change detection and disc-specific title caches
+- [ ] Validate DVD mappings across additional publishers, TV sets, and movie discs
+- [ ] Persist verified DVD mappings between sessions
+- [ ] Improve unknown/structural DVD title naming with optional metadata enrichment
+- [ ] Harden disc ejection and host recovery during active playback
+- [ ] Interactive DVD menus (deferred until direct-title playback is fully hardened)
 
 ## v1.0-dev.1 — Foundation
 
@@ -32,26 +30,26 @@ and stability suitable for `v1.0`.
 - [x] Independent settings, resume store, and logging
 - [x] Optical-drive discovery
 - [x] Fullscreen and keyboard routing foundation
-- [x] Original Parallax icon, build scripts, architecture notes, roadmap, and changelog
+- [x] App icon, build scripts, architecture notes, roadmap, and changelog
 
 ## v1.0-dev.2 — Playback state and controls
 
-- [ ] Dedicated libmpv event loop with safe cancellation
-- [ ] Observe pause, time-pos, duration, media-title, idle-active, and end-file
-- [ ] Accurate position/duration slider with click-to-seek and drag scrubbing
-- [ ] Play, pause, stop, ±5-second seek, volume, mute, and frame-step parity
-- [ ] File drag-and-drop and recent-file handling
-- [ ] Media-open and decoder errors surfaced without taking down the UI
-- [ ] Stable keyboard shortcuts matching classic Parallax
+- [x] Dedicated libmpv polling/event handling with safe cancellation
+- [x] Observe core pause, time, duration, idle, load, and end state
+- [x] Accurate position/duration slider with seeking
+- [x] Play, pause, stop, relative seek, volume, and mute
+- [x] File drag-and-drop
+- [x] Media-open/native errors surfaced through status/logging
+- [ ] Complete shortcut parity and frame-step polish
 
 ## v1.0-dev.3 — Tracks and chapters
 
-- [ ] Parse `track-list` into Core media-track models
-- [ ] Audio and subtitle track picker with readable labels
-- [ ] Subtitle Off state and forced/default indicators
-- [ ] Parse chapters and expose timestamp navigation
-- [ ] Refresh tracks after media changes and disc title changes
-- [ ] Preserve deliberate user selection during the active session
+- [x] Parse media tracks into Core models
+- [x] Audio and subtitle track picker with readable labels
+- [x] Subtitle Off state
+- [x] Chapter parsing and timestamp navigation
+- [x] Refresh tracks after media/title changes
+- [x] Preserve active session selections where supported
 
 ## v1.0-dev.4 — Resume and session reliability
 
@@ -59,15 +57,20 @@ and stability suitable for `v1.0`.
 - [ ] Resume thresholds that avoid saving near the beginning or credits-end
 - [ ] Restore prompt / automatic resume policy matching proven Parallax behavior
 - [ ] Periodic crash-safe checkpoints
-- [ ] Window size, position, state, volume, and last-folder restore
+- [x] Window/appearance settings foundation
 - [ ] Corrupt-state recovery UI and diagnostic export
 
 ## v1.0-dev.5 — DVD and Blu-ray workflows
 
-- [ ] Disc picker with drive label, type, and readiness
-- [ ] DVD and Blu-ray device configuration through libmpv
-- [x] Title discovery and title switching
-- [x] Chapter navigation for active disc titles
+- [x] Disc picker/detection with drive label, type, and readiness
+- [x] DVD and Blu-ray device configuration through libmpv
+- [x] Blu-ray main-feature playback and direct title switching
+- [x] MakeMKV-backed title discovery
+- [x] Protected Blu-ray LibMMBD compatibility path
+- [x] DVD isolated playback host
+- [x] DVD full-disc title mapping/reconciliation
+- [x] Chapter/audio/subtitle navigation for active disc titles
+- [ ] Persist disc mappings and user corrections
 - [ ] Single-title play-all episode splitting and gap-detection workflow
 - [x] Clear encrypted-disc dependency and failure reporting
 - [x] Disc eject / media-change handling
@@ -83,12 +86,14 @@ and stability suitable for `v1.0`.
 
 ## v1.0-dev.7 — Player polish
 
-- [ ] Refined monochrome seek and volume sliders
-- [ ] Rounded command buttons with hover, press, disabled, and focus states
+- [ ] Refined cinematic seek and volume sliders
+- [ ] Premium command states and focus treatment
 - [ ] Compact and expanded player layouts
-- [ ] Now-playing title treatment and track-panel polish
+- [ ] Now-playing/title-browser presentation polish
 - [ ] High-DPI, ultrawide, multi-monitor, HDR, and VRR validation
 - [ ] Accessibility names, keyboard focus, contrast, and screen-reader pass
+- [x] New Parallax Studio application icon
+- [ ] Final cross-suite branding and presentation polish
 
 ## v1.0-dev.8 — Screenshots, packaging, and hardening
 
@@ -98,7 +103,9 @@ and stability suitable for `v1.0`.
 - [ ] Automated Core and Infrastructure tests
 - [ ] Long-playback, repeated-open, disc, resume, and fullscreen soak tests
 - [ ] Upgrade-safe settings schema and reproducible version stamping
+- [ ] Third-party redistribution/license review for packaged native components
 - [ ] Final README screenshots and user guide
+- [ ] Application updater using the Typezer∅ Windows release standard
 
 ## v1.0 — Stable
 
@@ -116,6 +123,4 @@ and stability suitable for `v1.0`.
 - Playlist and media-library features
 - Picture-in-picture / mini-player
 - Windows media controls and taskbar thumbnail commands
-- Automatic metadata providers
-
-These remain parked so they cannot destabilize the parity roadmap.
+- Automatic metadata providers beyond the minimal disc-title enrichment needed for optical-media usability

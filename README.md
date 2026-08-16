@@ -1,119 +1,68 @@
-# Parallax Studio v1.0-dev.5.5.5
-
-**Full DVD title mapping:** Parallax now probes the libdvdnav edition table before first selected-title playback and maps discovered entries by runtime, including the zero-based first DVD selector.
-
-A premium-direction foundation test for the cinematic player in the **Typezer∅ Studio Suite**. The original PowerShell/WinForms Parallax remains a separate stable application and is not replaced by this project.
-
-## This test build
-
-This build replaces per-title guess-and-correct behavior with a complete map generated before the first selected DVD title starts. The isolated probe reads libdvdnav's edition table, matches its runtimes to MakeMKV metadata, supports the zero-based first selector, and refuses uncertain selections rather than silently loading the wrong program.
-
-## Build
-
-Place the 64-bit libmpv runtime in `native\`, then run:
-
-```powershell
-.\build.ps1 -Run
-```
-
-## Stable project boundary
-
-Parallax Studio is a sibling project under `Windows/Apps/Typezer∅ Studio/Parallax Studio/`. It does not overwrite or share runtime state with the PowerShell/WinForms Parallax.
+# Parallax Studio
 
 <p align="center">
-  <img src="src/ParallaxStudio.App/Assets/parallax-studio-icon-256.png" width="116" alt="Parallax Studio">
+  <img src="src/ParallaxStudio.App/Assets/parallax-studio-icon-256.png" width="128" alt="Parallax Studio icon">
 </p>
 
 <h1 align="center">Parallax Studio</h1>
 
 <p align="center">
-  A modern Windows desktop fork of Parallax built with C#, WPF, XAML, MVVM, and libmpv.<br>
-  The original PowerShell/WinForms Parallax remains an independent, stable project.
+  A premium Windows desktop video player in the <strong>Typezer∅ Studio Suite</strong>, built with C#, WPF, XAML, MVVM, and libmpv.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0--dev.1-2d2d2d">
-  <img src="https://img.shields.io/badge/.NET-10-2d2d2d?logo=dotnet&logoColor=white">
-  <img src="https://img.shields.io/badge/UI-WPF%20%2B%20XAML-2d2d2d">
-  <img src="https://img.shields.io/badge/pattern-MVVM-2d2d2d">
-  <img src="https://img.shields.io/badge/backend-libmpv-2d2d2d">
+  <img src="https://img.shields.io/badge/version-1.0--dev.5.5.5-2d2d2d" alt="version 1.0-dev.5.5.5">
+  <img src="https://img.shields.io/badge/.NET-10-2d2d2d?logo=dotnet&logoColor=white" alt=".NET 10">
+  <img src="https://img.shields.io/badge/UI-WPF%20%2B%20XAML-2d2d2d" alt="WPF and XAML">
+  <img src="https://img.shields.io/badge/pattern-MVVM-2d2d2d" alt="MVVM">
+  <img src="https://img.shields.io/badge/backend-libmpv-2d2d2d" alt="libmpv">
 </p>
 
-## Project status
+> **Development status:** active pre-release development. Local-file, Blu-ray, and DVD playback are functional, but the project is not yet a stable v1.0 release.
 
-**Current build: v1.0-dev.2.2 — Foundation hotfix**
+Parallax Studio is a separate modern implementation of the original PowerShell/WinForms **Parallax** player. The classic application remains independent and is not replaced, modified, or used as a runtime dependency.
 
-This first build establishes the independent solution, dependency boundaries,
-custom WPF player shell, MVVM layer, theme resources, native video host, local
-settings, resume-store foundation, optical-disc discovery, logging, and a direct
-libmpv adapter.
+## Current milestone — v1.0-dev.5.5.5
 
-When `libmpv-2.dll` is present, dev.1 can initialize libmpv inside the native WPF
-video surface and provides foundation file playback, pause, stop, relative seek,
-and volume control. Position polling, track discovery, resume wiring, disc title
-navigation, and control auto-hide are intentionally staged for later builds.
+The current milestone proves the optical-media architecture end to end:
 
-## Important project boundary
+- local video playback through an in-process libmpv engine;
+- protected Blu-ray playback using a locally installed MakeMKV LibMMBD provider when available;
+- MakeMKV-assisted Blu-ray and DVD title discovery;
+- DVD playback inside an isolated playback host so a native DVD failure cannot terminate the WPF application;
+- audio-track, subtitle, chapter, seeking, volume, mute, and fullscreen controls;
+- serialized/cancellable optical-disc discovery and automatic disc-change detection;
+- full-disc DVD title mapping by runtime rather than assuming MakeMKV and libdvdnav title numbers are identical.
 
-Parallax Studio does **not** replace, modify, import, or write configuration into
-the original Parallax project. The PowerShell/WinForms application remains stable
-on its own version line. Parallax Studio has its own:
-
-- solution and source tree;
-- versioning, beginning at `v1.0-dev.2.2`;
-- settings under `%LOCALAPPDATA%\ParallaxStudio`;
-- logs under `%LOCALAPPDATA%\ParallaxStudio\logs`;
-- resume database and libmpv integration.
-
-The original Parallax is the behavioral reference. Features are ported in focused
-vertical slices instead of sharing runtime code between the two applications.
-
-## Foundation features
-
-- Three-project solution with one-way dependency flow
-- WPF application shell with custom dark title bar and native child-window video surface
-- Lightweight MVVM primitives and command handling
-- Centralized XAML colors, typography, cards, buttons, sliders, and status treatments
-- Direct dynamically loaded libmpv client API adapter with no wrapper-package dependency
-- Foundation file playback: open, play/pause, stop, ±5-second seek, and volume
-- Independent JSON settings with atomic writes and corrupt-file recovery
-- Independent JSON resume store ready for per-file watch-later wiring
-- Optical-drive discovery with DVD / Blu-ray / data-disc classification
-- Fullscreen shell toggle and keyboard command foundation
-- Startup, shutdown, native-backend, and exception logging
-- Original Parallax icon carried into the Studio application and README
-- PowerShell and CMD build launchers
+DVD title names remain dependent on what the disc actually exposes. When a disc contains only structural labels, Parallax can identify programs by runtime/chapter structure but cannot invent authoritative episode names. Metadata enrichment and persistent per-disc mappings are planned later.
 
 ## Requirements
 
 - Windows 10 or Windows 11, x64
 - .NET 10 SDK
-- Visual Studio 2026 with the **.NET desktop development** workload, or the `dotnet` CLI
-- 64-bit `libmpv-2.dll` for playback
+- 7-Zip for native dependency bootstrap
+- a DVD/Blu-ray optical drive for disc playback
+- **MakeMKV installed locally** for the current protected Blu-ray/LibMMBD path and MakeMKV-assisted title discovery
 
-## libmpv setup
-
-Create or use the included `native` folder and place the 64-bit development runtime DLL there:
-
-```text
-ParallaxStudio\native\libmpv-2.dll
-```
-
-The project copies DLLs from `native` into the app output directory during build.
-The shell still launches without libmpv and reports the missing backend without
-crashing.
-
-Optional encrypted-disc support can later use `libdvdcss.dll`, `libaacs.dll`, and
-its normal configuration. Those files are not included.
+Visual Studio with the **.NET desktop development** workload is optional; the `dotnet` CLI and included PowerShell build script are sufficient.
 
 ## Build and run
 
+The normal development command is:
+
 ```powershell
-# From the ParallaxStudio folder
+.\build.ps1 -Bootstrap -InstallBootstrapTools -Run
+```
+
+The bootstrap reads `native-dependencies.json`, downloads the pinned native packages, verifies them, and stages the required runtime files. Normal builds can then run without re-downloading dependencies.
+
+To build without bootstrapping:
+
+```powershell
 .\build.ps1 -Run
 ```
 
-Or:
+Or use the .NET CLI directly:
 
 ```powershell
 dotnet restore .\ParallaxStudio.sln
@@ -121,83 +70,95 @@ dotnet build .\ParallaxStudio.sln -c Debug
 dotnet run --project .\src\ParallaxStudio.App\ParallaxStudio.App.csproj
 ```
 
+## Native playback dependencies
+
+Parallax Studio deliberately keeps third-party native runtime handling explicit.
+
+| Component | Role | Source/handling |
+|---|---|---|
+| `libmpv-2.dll` | Core playback engine | Pinned bootstrap dependency |
+| `libaacs.dll` | Standard AACS fallback | Optional pinned bootstrap dependency |
+| `libbdplus.dll` | Standard BD+ fallback | Optional pinned bootstrap dependency |
+| `libdvdcss-2.dll` | CSS-protected DVD support | Pinned libdvdcss 1.5.0 package |
+| MakeMKV `libmmbd64.dll` | Current protected Blu-ray compatibility provider | Detected from the user's local MakeMKV installation |
+| MakeMKV CLI (`makemkvcon64.exe` / `makemkvcon.exe`) | Blu-ray/DVD title discovery metadata | Detected from the user's local MakeMKV installation |
+
+### MakeMKV / LibMMBD integration
+
+Parallax Studio's source repository **does not download or bundle MakeMKV**. When MakeMKV is installed locally, `build.ps1` looks for `libmmbd64.dll` under the standard MakeMKV installation directories. For the local development build it:
+
+1. preserves bootstrapped standard providers as `libaacs.standard.dll` and `libbdplus.standard.dll` when present;
+2. copies the locally installed `libmmbd64.dll` into the build output;
+3. stages that same local file as runtime `libaacs.dll` and `libbdplus.dll`, which is the compatibility naming expected by the libbluray/libmpv disc path;
+4. verifies the staged files against the local provider with SHA-256 before launch;
+5. reports the active disc-decryption provider in the application log.
+
+The playback service also accepts `PARALLAX_STUDIO_LIBMMBD` to point at a specific local `libmmbd64.dll` when the standard MakeMKV installation path is not appropriate.
+
+**Redistribution note:** the build output may contain files copied from the user's local MakeMKV installation. Do not treat those locally staged files as Parallax-owned redistributable dependencies. Packaging/public-release work must review the applicable third-party licenses and redistribution terms before including any such binary.
+
+See [docs/OPTICAL_MEDIA.md](docs/OPTICAL_MEDIA.md), [native/README.md](native/README.md), and [THIRD_PARTY.md](THIRD_PARTY.md) for the implementation and dependency boundaries.
+
+## Optical media
+
+### Blu-ray
+
+Blu-ray playback uses libmpv/libbluray. Parallax can browse titles, identify likely main/bonus content, switch titles, and expose audio, subtitle, and chapter navigation. When MakeMKV LibMMBD is available, Parallax uses the locally installed provider for the protected-disc compatibility path. Standard `libaacs`/`libbdplus` remain available as a fallback path.
+
+### DVD
+
+DVD playback uses libmpv/libdvdnav with pinned `libdvdcss-2.dll` support for CSS-protected media. DVD playback is intentionally isolated in `ParallaxStudio.DvdPlaybackHost.exe` and controlled from the main application through a private named pipe. This process boundary prevents a native DVD backend failure from taking down the Parallax Studio UI.
+
+MakeMKV and libdvdnav do not always number DVD titles the same way. v1.0-dev.5.5.5 therefore probes the full libdvdnav edition table and maps discovered MakeMKV entries by runtime. Uncertain entries are rejected instead of silently playing the wrong program.
+
+Interactive DVD menus are not yet implemented.
+
+## Branding
+
+The current Parallax Studio mark combines a dark cinematic `P`, an inset play symbol, layered depth rings, and a film-strip element. Multi-resolution Windows and PNG assets live under `src/ParallaxStudio.App/Assets/`; the executable uses `parallax-studio.ico` and the WPF shell uses the matching raster family.
+
+## Runtime data
+
+Parallax Studio keeps its state separate from classic Parallax:
+
+```text
+%LOCALAPPDATA%\ParallaxStudio\
+├── settings.json
+├── resume.json
+├── cache\
+└── logs\parallax-studio.log
+```
+
+The persistent log is the first place to inspect native playback, disc discovery, LibMMBD detection, title reconciliation, and runtime failures.
+
 ## Solution layout
 
 ```text
 ParallaxStudio/
-├── native/                              Local native DLL drop folder
+├── docs/                                Optical-media and implementation notes
+├── native/                              Bootstrapped native runtime drop folder
+├── scripts/                             Native bootstrap/verification tooling
 ├── src/
-│   ├── ParallaxStudio.App/              WPF views, XAML resources, MVVM, native HWND host
+│   ├── ParallaxStudio.App/              WPF UI, ViewModels, themes, HWND video host
 │   ├── ParallaxStudio.Core/             Playback/disc/track/resume models and contracts
-│   └── ParallaxStudio.Infrastructure/   libmpv, JSON stores, disc discovery, logging
+│   ├── ParallaxStudio.Infrastructure/   libmpv, disc discovery, persistence, logging
+│   ├── ParallaxStudio.DvdProbe/         Isolated DVD safety/runtime probe
+│   └── ParallaxStudio.DvdPlaybackHost/  Isolated DVD playback process
 ├── ARCHITECTURE.md
-├── ROADMAP.md
 ├── CHANGELOG.md
-├── Directory.Build.props
-├── global.json
+├── ROADMAP.md
+├── TESTING.md
+├── THIRD_PARTY.md
+├── native-dependencies.json
 └── ParallaxStudio.sln
 ```
 
-## First test
+## Project boundary
 
-1. Copy `libmpv-2.dll` into `native`.
-2. Run `.\build.ps1 -Run`.
-3. Confirm the custom title bar, native video surface, right-side playback panel, and bottom transport dock render correctly.
-4. Confirm the backend badge changes from **Checking libmpv** to a client API version.
-5. Open a local video and test pause, stop, ±5-second seek, volume, `Space`, arrow keys, `F`, and `Esc`.
-6. Click **Disc scan** and confirm ready optical drives appear without blocking the UI.
-7. Close and reopen the app; volume and window geometry should restore.
-8. Check `%LOCALAPPDATA%\ParallaxStudio\logs\parallax-studio.log`.
+Parallax Studio is an independent Typezer∅ Studio application. It does not share settings, resume state, or runtime files with the original PowerShell/WinForms Parallax. The original player remains the behavioral reference while functionality is ported and improved in focused vertical slices.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for design boundaries and
-[ROADMAP.md](ROADMAP.md) for the staged parity plan.
+## Development direction
 
+The immediate optical-media work is to validate the full-disc DVD map against more publishers/discs, persist verified mappings, improve title naming when metadata is sparse, and continue hardening disc ejection/title switching. The broader roadmap then returns to resume/session reliability, fullscreen polish, packaging, release infrastructure, and the final cinematic Studio presentation.
 
-## v1.0-dev.4 test focus
-
-This build introduces live audio-track switching, embedded and external subtitles, subtitle delay, and chapter navigation through the new Tracks panel.
-
-## Native dependency bootstrap
-
-Parallax Studio pins its required libmpv package in `native-dependencies.json`. Normal builds remain offline and never download files unexpectedly.
-
-```powershell
-.\scripts\Get-NativeDependencies.ps1
-.\build.ps1 -Run
-```
-
-A one-command explicit bootstrap is also available:
-
-```powershell
-.\build.ps1 -Bootstrap -Run
-```
-
-The first successful bootstrap writes `native-dependencies.lock.json` containing the resolved archive and DLL SHA-256 values. Future verification uses that lock file. Optional disc libraries remain user-supplied.
-
-
-## Optical-disc foundation
-
-Blu-rays use libmpv/libbluray direct playback (`bd://longest`) with MakeMKV LibMMBD when available. DVDs use libmpv direct playback (`dvd://`) with pinned libdvdcss 1.5.0 for CSS-protected media. Every DVD source is first opened in an isolated helper process so a native DVD backend failure cannot terminate the Parallax Studio UI. Interactive DVD menus remain deferred.
-
-
-## Native disc libraries
-
-A fresh bootstrap now attempts to install the complete x64 native playback set into `native/`:
-
-- `libmpv-2.dll` — required playback backend
-- `libaacs.dll` — optional AACS support
-- `libbdplus.dll` — optional BD+ support
-- `libdvdcss-2.dll` — optional CSS-encrypted DVD support
-
-Run:
-
-```powershell
-.\build.ps1 -Bootstrap -InstallBootstrapTools -Run
-```
-
-Optional libraries never make the normal build fail. The bootstrap records downloaded file hashes in `native-dependencies.lock.json`. No decryption keys are included or downloaded.
-
-
-### DVD process isolation
-
-DVD playback runs in a dedicated child process and communicates with the Parallax Studio UI over a private named pipe. This keeps native DVD backend failures from terminating the main application.
+See [ROADMAP.md](ROADMAP.md) for the staged plan and [CHANGELOG.md](CHANGELOG.md) for development history.
