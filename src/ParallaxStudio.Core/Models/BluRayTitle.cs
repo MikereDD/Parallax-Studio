@@ -12,9 +12,12 @@ public sealed record BluRayTitle(
     bool IsLikelyMainFeature = false,
     bool IsLikelyDuplicate = false,
     DiscKind SourceKind = DiscKind.BluRay,
-    bool IsLikelyEpisode = false)
+    bool IsLikelyEpisode = false,
+    int? DvdPlaybackTitleNumber = null,
+    bool IsDvdMappingVerified = false)
 {
     public int DisplayNumber => Index + 1;
+    public int? DvdDisplayTitleNumber => DvdPlaybackTitleNumber is >= 0 ? DvdPlaybackTitleNumber.Value + 1 : null;
     public bool IsTechnicalItem => Duration > TimeSpan.Zero && Duration < TimeSpan.FromSeconds(75);
 
     public string PrimaryText
@@ -53,6 +56,8 @@ public sealed record BluRayTitle(
             var details = new List<string> { DurationText };
             if (ChapterCount > 0) details.Add($"{ChapterCount} chapter{(ChapterCount == 1 ? string.Empty : "s")}");
             if (!string.IsNullOrWhiteSpace(Playlist)) details.Add(Playlist!);
+            if (SourceKind == DiscKind.Dvd && DvdDisplayTitleNumber is int dvdTitleNumber)
+                details.Add($"DVD title {dvdTitleNumber}{(IsDvdMappingVerified ? " verified" : string.Empty)}");
             return string.Join("  •  ", details);
         }
     }

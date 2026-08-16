@@ -9,9 +9,16 @@ internal sealed record DvdHostRequest(
     string? Kind = null,
     string? Path = null);
 
+internal sealed record DvdEditionInfo(
+    int Selector,
+    TimeSpan Duration,
+    string? Title = null,
+    bool IsCurrent = false);
+
 internal sealed record DvdHostResponse(
     bool Ok,
     string? Error = null,
     PlaybackSnapshot? Snapshot = null,
     MediaTrack[]? Tracks = null,
-    MediaChapter[]? Chapters = null);
+    MediaChapter[]? Chapters = null,
+    DvdEditionInfo[]? Editions = null);

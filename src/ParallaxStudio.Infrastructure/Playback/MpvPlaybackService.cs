@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using ParallaxStudio.Core.Enums;
 using ParallaxStudio.Core.Events;
@@ -21,8 +22,15 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private int _pendingDvdEditionIndex = -1;
     private bool _pendingDvdEditionSwitchIssued;
     private readonly HashSet<string> _dvdProbePassCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _dvdFullMapCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Dictionary<int, int>> _dvdPlaybackTitleByMetadataIndex = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _dvdMappingSync = new();
     private DvdPlaybackHostClient? _dvdHost;
     private bool _usingDvdHost;
+    private bool _dvdHostReconciliationPending;
+    private int _requestedDvdMetadataIndex = -1;
+    private int _activeDvdPlaybackTitleNumber = -1;
+    private string _activeDvdDisplayName = "DVD";
     private nint _videoWindowHandle;
 
     private readonly LibMpvLibrary _library = new();
@@ -311,10 +319,14 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
             _activeDvdDevice = device;
+            _activeDvdDisplayName = CleanDiscTitle(disc.DisplayName, device, "DVD Disc");
             _loadedDvdCacheKey = BuildDiscCacheKey(disc);
             _activeDvdTitleIndex = _dvdTitleCache.TryGetValue(_loadedDvdCacheKey, out var cachedDvdTitles) && cachedDvdTitles.Count > 0
                 ? cachedDvdTitles.OrderByDescending(title => title.Duration).First().Index
                 : -1;
+            _requestedDvdMetadataIndex = _activeDvdTitleIndex;
+            _activeDvdPlaybackTitleNumber = -1;
+            _dvdHostReconciliationPending = true;
             LastPlaybackError = null;
 
             await StopInternalPlaybackAsync(cancellationToken).ConfigureAwait(false);
@@ -340,6 +352,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         }
         catch
         {
+            _dvdHostReconciliationPending = false;
             _usingDvdHost = false;
             throw;
         }
@@ -364,6 +377,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
             _activeDvdDevice = device;
+            _activeDvdDisplayName = CleanDiscTitle(disc.DisplayName, device, "DVD Disc");
             _loadedDvdCacheKey = BuildDiscCacheKey(disc);
 
             if (_dvdTitleCache.TryGetValue(_loadedDvdCacheKey, out var cachedTitles))
@@ -372,9 +386,22 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                     ?? throw new InvalidOperationException($"DVD title {titleIndex + 1} is not present in the current disc metadata.");
                 if (selected.Duration > TimeSpan.FromHours(12))
                     throw new InvalidOperationException("This DVD entry appears to be an aggregate navigation title and is not safe for direct playback.");
+
+                if (!HasDvdPlaybackMapping(_loadedDvdCacheKey, titleIndex))
+                    await EnsureDvdFullTitleMapAsync(disc, cachedTitles, cancellationToken).ConfigureAwait(false);
+
+                if (!HasDvdPlaybackMapping(_loadedDvdCacheKey, titleIndex))
+                {
+                    throw new InvalidOperationException(
+                        $"Parallax could not confidently match DVD metadata title {titleIndex + 1} to a playable DVD title. " +
+                        "The title was not started rather than risking playback of the wrong program.");
+                }
             }
 
-            var dvdTitleNumber = titleIndex + 1;
+            var dvdTitleNumber = ResolveDvdPlaybackTitleNumber(_loadedDvdCacheKey, titleIndex);
+            _requestedDvdMetadataIndex = titleIndex;
+            _activeDvdPlaybackTitleNumber = dvdTitleNumber;
+            _dvdHostReconciliationPending = true;
             _activeDvdTitleIndex = titleIndex;
             LastPlaybackError = null;
 
@@ -382,8 +409,8 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             SetSnapshot(Snapshot with
             {
                 State = PlaybackState.Loading,
-                Source = $"DVD disc • {device} • title {dvdTitleNumber}",
-                Title = $"{CleanDiscTitle(disc.DisplayName, device, "DVD Disc")} — Title {dvdTitleNumber}",
+                Source = $"DVD disc • {device} • title {dvdTitleNumber + 1}",
+                Title = $"{CleanDiscTitle(disc.DisplayName, device, "DVD Disc")} — Title {dvdTitleNumber + 1}",
                 Position = TimeSpan.Zero,
                 Duration = TimeSpan.Zero
             });
@@ -397,10 +424,14 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 Snapshot.Volume,
                 Snapshot.IsMuted,
                 cancellationToken).ConfigureAwait(false);
-            await logger.InfoAsync($"Started isolated DVD playback host for title {dvdTitleNumber} on {device}.", cancellationToken).ConfigureAwait(false);
+            var mappingKnown = HasDvdPlaybackMapping(_loadedDvdCacheKey, titleIndex);
+            await logger.InfoAsync(
+                $"Started isolated DVD playback host for DVD selector {dvdTitleNumber} (title {dvdTitleNumber + 1}) on {device} for metadata title {titleIndex + 1}{(mappingKnown ? " using the verified full-disc map" : " using a provisional fallback")}.",
+                cancellationToken).ConfigureAwait(false);
         }
         catch
         {
+            _dvdHostReconciliationPending = false;
             _usingDvdHost = false;
             throw;
         }
@@ -478,16 +509,30 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             .Where(title => title.Duration > TimeSpan.Zero)
             .GroupBy(title => Math.Round(title.Duration.TotalSeconds / 2d))
             .ToDictionary(group => group.Key, group => group.Count());
+        Dictionary<int, int>? verifiedMappings = null;
+        lock (_dvdMappingSync)
+        {
+            if (_dvdPlaybackTitleByMetadataIndex.TryGetValue(cacheKey, out var currentMappings))
+                verifiedMappings = new Dictionary<int, int>(currentMappings);
+        }
 
         return discovered
-            .Select(title => title with
+            .Select(title =>
             {
-                IsActive = title.Index == active,
-                IsLikelyEpisode = hasEpisodeSet && title.Duration >= TimeSpan.FromMinutes(18) && title.Duration <= TimeSpan.FromMinutes(75),
-                IsLikelyMainFeature = !hasEpisodeSet && longest > TimeSpan.Zero && title.Duration >= longest - TimeSpan.FromSeconds(2),
-                IsLikelyDuplicate = title.Duration > TimeSpan.Zero &&
-                    durationGroups.TryGetValue(Math.Round(title.Duration.TotalSeconds / 2d), out var matches) && matches > 1,
-                SourceKind = DiscKind.Dvd
+                var playbackTitleNumber = -1;
+                var hasVerifiedMapping = verifiedMappings is not null &&
+                    verifiedMappings.TryGetValue(title.Index, out playbackTitleNumber);
+                return title with
+                {
+                    IsActive = title.Index == active,
+                    IsLikelyEpisode = hasEpisodeSet && title.Duration >= TimeSpan.FromMinutes(18) && title.Duration <= TimeSpan.FromMinutes(75),
+                    IsLikelyMainFeature = !hasEpisodeSet && longest > TimeSpan.Zero && title.Duration >= longest - TimeSpan.FromSeconds(2),
+                    IsLikelyDuplicate = title.Duration > TimeSpan.Zero &&
+                        durationGroups.TryGetValue(Math.Round(title.Duration.TotalSeconds / 2d), out var matches) && matches > 1,
+                    SourceKind = DiscKind.Dvd,
+                    DvdPlaybackTitleNumber = hasVerifiedMapping ? playbackTitleNumber : (int?)null,
+                    IsDvdMappingVerified = hasVerifiedMapping
+                };
             })
             .OrderByDescending(title => title.IsActive)
             .ThenByDescending(title => title.IsLikelyEpisode)
@@ -669,6 +714,316 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             // Best effort only. Cancellation still unwinds the discovery task.
         }
     }
+
+    private bool HasDvdPlaybackMapping(string cacheKey, int metadataIndex)
+    {
+        lock (_dvdMappingSync)
+        {
+            return _dvdPlaybackTitleByMetadataIndex.TryGetValue(cacheKey, out var mapping) &&
+                mapping.TryGetValue(metadataIndex, out var selector) &&
+                selector >= 0;
+        }
+    }
+
+    private async Task EnsureDvdFullTitleMapAsync(
+        DiscSource disc,
+        IReadOnlyList<BluRayTitle> metadataTitles,
+        CancellationToken cancellationToken)
+    {
+        var cacheKey = BuildDiscCacheKey(disc);
+        lock (_dvdMappingSync)
+        {
+            if (_dvdFullMapCache.Contains(cacheKey))
+                return;
+        }
+
+        var probePath = Path.Combine(AppContext.BaseDirectory, "dvd-probe", "ParallaxStudio.DvdProbe.exe");
+        if (!File.Exists(probePath))
+            throw new InvalidOperationException($"DVD title-map probe is missing: {probePath}");
+
+        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = probePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add(device);
+        startInfo.ArgumentList.Add("0");
+
+        await logger.InfoAsync($"Building full DVD title map for {device} before playback using the first authored title as the probe anchor.", cancellationToken).ConfigureAwait(false);
+
+        using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        if (!process.Start())
+            throw new InvalidOperationException("The isolated DVD title-map probe could not be started.");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        try
+        {
+            var exitTask = process.WaitForExitAsync(cancellationToken);
+            var completed = await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromSeconds(60), cancellationToken)).ConfigureAwait(false);
+            if (!ReferenceEquals(completed, exitTask))
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+                throw new TimeoutException("The isolated DVD title-map probe did not finish within 60 seconds.");
+            }
+            await exitTask.ConfigureAwait(false);
+        }
+        catch
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+            throw;
+        }
+
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        var stderr = (await stderrTask.ConfigureAwait(false)).Trim();
+        if (!string.IsNullOrWhiteSpace(stderr))
+            await logger.WarningAsync($"DVD title-map probe error output: {stderr}", cancellationToken).ConfigureAwait(false);
+
+        if (process.ExitCode != 0)
+        {
+            var unsignedExit = unchecked((uint)process.ExitCode);
+            throw new InvalidOperationException($"DVD title mapping failed in the isolated probe (exit 0x{unsignedExit:X8}).");
+        }
+
+        var editions = ParseDvdEditionMap(stdout);
+        var mapping = BuildDvdMetadataToSelectorMap(metadataTitles, editions);
+        if (mapping.Count == 0)
+            throw new InvalidOperationException("The DVD exposed no title durations that could be matched confidently to the discovered metadata.");
+
+        lock (_dvdMappingSync)
+        {
+            _dvdPlaybackTitleByMetadataIndex[cacheKey] = mapping;
+            _dvdFullMapCache.Add(cacheKey);
+        }
+
+        var mappedText = string.Join(", ", mapping
+            .OrderBy(pair => pair.Key)
+            .Select(pair => $"metadata {pair.Key + 1}->DVD title {pair.Value + 1}"));
+        await logger.InfoAsync($"Full DVD title map built with {mapping.Count} confident matches: {mappedText}.", cancellationToken).ConfigureAwait(false);
+    }
+
+    private static IReadOnlyList<DvdEditionInfo> ParseDvdEditionMap(string output)
+    {
+        var result = new List<DvdEditionInfo>();
+        foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!rawLine.StartsWith("DVD_EDITION|", StringComparison.Ordinal)) continue;
+            var parts = rawLine.Split('|', 5);
+            if (parts.Length != 5 ||
+                !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var selector) ||
+                !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) ||
+                !double.IsFinite(seconds) || seconds <= 0)
+            {
+                continue;
+            }
+
+            string? title = null;
+            try { title = Encoding.UTF8.GetString(Convert.FromBase64String(parts[4])); } catch { }
+            result.Add(new DvdEditionInfo(
+                selector,
+                TimeSpan.FromSeconds(seconds),
+                title,
+                parts[3] == "1"));
+        }
+        return result;
+    }
+
+    private static Dictionary<int, int> BuildDvdMetadataToSelectorMap(
+        IReadOnlyList<BluRayTitle> metadataTitles,
+        IReadOnlyList<DvdEditionInfo> editions)
+    {
+        var candidates = metadataTitles
+            .Where(title => title.Duration > TimeSpan.Zero && title.Duration <= TimeSpan.FromHours(12))
+            .SelectMany(title => editions
+                .Where(edition => edition.Selector >= 0 && edition.Duration > TimeSpan.Zero && edition.Duration <= TimeSpan.FromHours(12))
+                .Select(edition => new
+                {
+                    MetadataIndex = title.Index,
+                    edition.Selector,
+                    Delta = Math.Abs((title.Duration - edition.Duration).TotalSeconds),
+                    Tolerance = Math.Max(20d, title.Duration.TotalSeconds * 0.025d)
+                }))
+            .Where(candidate => candidate.Delta <= candidate.Tolerance)
+            .OrderBy(candidate => candidate.Delta)
+            .ThenBy(candidate => candidate.MetadataIndex)
+            .ThenBy(candidate => candidate.Selector)
+            .ToArray();
+
+        var result = new Dictionary<int, int>();
+        var usedSelectors = new HashSet<int>();
+        foreach (var candidate in candidates)
+        {
+            if (result.ContainsKey(candidate.MetadataIndex) || usedSelectors.Contains(candidate.Selector))
+                continue;
+            result[candidate.MetadataIndex] = candidate.Selector;
+            usedSelectors.Add(candidate.Selector);
+        }
+        return result;
+    }
+
+    private int ResolveDvdPlaybackTitleNumber(string cacheKey, int metadataIndex)
+    {
+        lock (_dvdMappingSync)
+        {
+            if (_dvdPlaybackTitleByMetadataIndex.TryGetValue(cacheKey, out var mapping) &&
+                mapping.TryGetValue(metadataIndex, out var playbackTitleNumber) &&
+                playbackTitleNumber >= 0)
+            {
+                return playbackTitleNumber;
+            }
+        }
+
+        return metadataIndex;
+    }
+
+    private async Task ReconcileDvdHostTitleAsync(PlaybackSnapshot hostSnapshot, CancellationToken cancellationToken)
+    {
+        _dvdHostReconciliationPending = false;
+        if (_dvdHost is not { IsActive: true } ||
+            string.IsNullOrWhiteSpace(_loadedDvdCacheKey) ||
+            !_dvdTitleCache.TryGetValue(_loadedDvdCacheKey, out var metadataTitles) ||
+            metadataTitles.Count == 0)
+        {
+            return;
+        }
+
+        IReadOnlyList<MediaChapter> chapters;
+        try
+        {
+            chapters = await _dvdHost.GetChaptersAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await logger.WarningAsync($"DVD title reconciliation could not read chapters: {ex.Message}", cancellationToken).ConfigureAwait(false);
+            chapters = [];
+        }
+
+        var actualDuration = hostSnapshot.Duration;
+        var actualChapterCount = chapters.Count;
+        var match = FindBestDvdMetadataMatch(metadataTitles, actualDuration, actualChapterCount);
+        if (match is null)
+        {
+            await logger.WarningAsync(
+                $"DVD title reconciliation found no confident metadata match for DVD selector {_activeDvdPlaybackTitleNumber} (title {_activeDvdPlaybackTitleNumber + 1}): " +
+                $"runtime={FormatDuration(actualDuration)}, chapters={actualChapterCount}.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var previousMetadataIndex = _requestedDvdMetadataIndex;
+        _activeDvdTitleIndex = match.Index;
+
+        if (_activeDvdPlaybackTitleNumber >= 0)
+        {
+            lock (_dvdMappingSync)
+            {
+                if (!_dvdPlaybackTitleByMetadataIndex.TryGetValue(_loadedDvdCacheKey, out var mapping))
+                {
+                    mapping = new Dictionary<int, int>();
+                    _dvdPlaybackTitleByMetadataIndex[_loadedDvdCacheKey] = mapping;
+                }
+
+                foreach (var staleKey in mapping
+                    .Where(pair => pair.Value == _activeDvdPlaybackTitleNumber && pair.Key != match.Index)
+                    .Select(pair => pair.Key)
+                    .ToArray())
+                {
+                    mapping.Remove(staleKey);
+                }
+
+                mapping[match.Index] = _activeDvdPlaybackTitleNumber;
+            }
+        }
+
+        var requestedText = previousMetadataIndex >= 0 ? (previousMetadataIndex + 1).ToString(CultureInfo.InvariantCulture) : "longest";
+        await logger.InfoAsync(
+            $"DVD title reconciled: requested metadata title {requestedText}, DVD selector {_activeDvdPlaybackTitleNumber} (title {_activeDvdPlaybackTitleNumber + 1}), " +
+            $"actual runtime={FormatDuration(actualDuration)}, chapters={actualChapterCount}, " +
+            $"matched metadata title {match.DisplayNumber} ({match.DurationText}, {match.ChapterCount} chapters).",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static BluRayTitle? FindBestDvdMetadataMatch(
+        IReadOnlyList<BluRayTitle> metadataTitles,
+        TimeSpan actualDuration,
+        int actualChapterCount)
+    {
+        if (actualDuration <= TimeSpan.Zero)
+            return null;
+
+        var ranked = metadataTitles
+            .Where(title => title.Duration > TimeSpan.Zero && title.Duration <= TimeSpan.FromHours(12))
+            .Select(title => new
+            {
+                Title = title,
+                DurationDelta = Math.Abs((title.Duration - actualDuration).TotalSeconds),
+                ChapterDelta = actualChapterCount > 0 && title.ChapterCount > 0
+                    ? Math.Abs(title.ChapterCount - actualChapterCount)
+                    : 0
+            })
+            .Select(item => new
+            {
+                item.Title,
+                item.DurationDelta,
+                item.ChapterDelta,
+                Score = item.DurationDelta + (item.ChapterDelta * 180d)
+            })
+            .OrderBy(item => item.Score)
+            .ThenBy(item => item.DurationDelta)
+            .ThenBy(item => item.Title.Index)
+            .ToArray();
+
+        if (ranked.Length == 0)
+            return null;
+
+        var best = ranked[0];
+        var durationTolerance = Math.Max(20d, actualDuration.TotalSeconds * 0.025d);
+        if (best.DurationDelta > durationTolerance)
+            return null;
+        if (actualChapterCount > 0 && best.Title.ChapterCount > 0 && best.ChapterDelta > 1)
+            return null;
+
+        if (ranked.Length > 1)
+        {
+            var second = ranked[1];
+            var ambiguous = Math.Abs(second.Score - best.Score) < 3d &&
+                Math.Abs(second.DurationDelta - best.DurationDelta) < 3d;
+            if (ambiguous)
+                return null;
+        }
+
+        return best.Title;
+    }
+
+    private PlaybackSnapshot ApplyDvdHostPresentation(PlaybackSnapshot hostSnapshot)
+    {
+        if (string.IsNullOrWhiteSpace(_loadedDvdCacheKey) ||
+            !_dvdTitleCache.TryGetValue(_loadedDvdCacheKey, out var titles))
+        {
+            return hostSnapshot;
+        }
+
+        var activeTitle = titles.FirstOrDefault(title => title.Index == _activeDvdTitleIndex);
+        var programText = _activeDvdPlaybackTitleNumber >= 0
+            ? $" • DVD title {_activeDvdPlaybackTitleNumber + 1}"
+            : string.Empty;
+        var titleText = activeTitle is null
+            ? _activeDvdDisplayName
+            : $"{_activeDvdDisplayName} — {activeTitle.PrimaryText}";
+
+        return hostSnapshot with
+        {
+            Source = $"DVD disc • {_activeDvdDevice}{programText}",
+            Title = titleText
+        };
+    }
+
+    private static string FormatDuration(TimeSpan duration) =>
+        duration.TotalHours >= 1 ? duration.ToString(@"h\:mm\:ss") : duration.ToString(@"m\:ss");
 
     private static string BuildDiscCacheKey(DiscSource disc)
     {
@@ -958,11 +1313,20 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                         try
                         {
                             var hostSnapshot = await _dvdHost.GetSnapshotAsync(cancellationToken).ConfigureAwait(false);
-                            if (hostSnapshot != Snapshot) SetSnapshot(hostSnapshot);
+                            if (_dvdHostReconciliationPending &&
+                                hostSnapshot.State is PlaybackState.Playing or PlaybackState.Paused &&
+                                hostSnapshot.Duration > TimeSpan.Zero)
+                            {
+                                await ReconcileDvdHostTitleAsync(hostSnapshot, cancellationToken).ConfigureAwait(false);
+                            }
+
+                            var presentedSnapshot = ApplyDvdHostPresentation(hostSnapshot);
+                            if (presentedSnapshot != Snapshot) SetSnapshot(presentedSnapshot);
                         }
                         catch (Exception ex)
                         {
                             LastPlaybackError = ex.Message;
+                            _dvdHostReconciliationPending = false;
                             _usingDvdHost = false;
                             SetSnapshot(Snapshot with { State = PlaybackState.Faulted });
                             await logger.ErrorAsync("The isolated DVD playback host stopped responding.", ex, cancellationToken).ConfigureAwait(false);
@@ -980,6 +1344,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                         LastPlaybackError = exitCode is int code
                             ? $"The isolated DVD playback host exited with code 0x{unchecked((uint)code):X8}."
                             : "The isolated DVD playback host exited unexpectedly.";
+                        _dvdHostReconciliationPending = false;
                         _usingDvdHost = false;
                         SetSnapshot(Snapshot with { State = PlaybackState.Faulted });
                         await logger.ErrorAsync(LastPlaybackError ?? "The isolated DVD playback host exited unexpectedly.", cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -1298,6 +1663,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     {
         if (_dvdHost is not null)
             await _dvdHost.StopHostAsync(cancellationToken).ConfigureAwait(false);
+        _dvdHostReconciliationPending = false;
         _usingDvdHost = false;
     }
 

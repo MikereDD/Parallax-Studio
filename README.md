@@ -1,14 +1,12 @@
-# Parallax Studio v1.0-dev.5.5.3.1
+# Parallax Studio v1.0-dev.5.5.5
+
+**Full DVD title mapping:** Parallax now probes the libdvdnav edition table before first selected-title playback and maps discovered entries by runtime, including the zero-based first DVD selector.
 
 A premium-direction foundation test for the cinematic player in the **Typezer∅ Studio Suite**. The original PowerShell/WinForms Parallax remains a separate stable application and is not replaced by this project.
 
 ## This test build
 
-This test adds the DVD playback foundation on top of the validated Blu-ray path. DVDs can play their longest title directly, expose numbered titles for episode and bonus-feature selection, reuse audio/subtitle/chapter navigation, and share the responsive serialized discovery and automatic disc-swap architecture.
-
-The build combines the existing native libmpv foundation with the Studio Suite visual system established by Cadence Studio. It includes live selection of all six approved themes and the three typography profiles, the official Parallax icon, a redesigned cinematic shell, file-open/playback controls, fullscreen routing, optical-drive discovery, independent settings, logging, and resume-store foundations.
-
-See `TESTING.md` for the after-work test sequence and current limitations.
+This build replaces per-title guess-and-correct behavior with a complete map generated before the first selected DVD title starts. The isolated probe reads libdvdnav's edition table, matches its runtimes to MakeMKV metadata, supports the zero-based first selector, and refuses uncertain selections rather than silently loading the wrong program.
 
 ## Build
 

@@ -65,7 +65,7 @@ internal sealed class DvdPlaybackHostClient(IAppLogger logger) : IAsyncDisposabl
         startInfo.ArgumentList.Add("--device");
         startInfo.ArgumentList.Add(device);
         startInfo.ArgumentList.Add("--title");
-        startInfo.ArgumentList.Add((titleNumber ?? 0).ToString(CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add((titleNumber ?? -1).ToString(CultureInfo.InvariantCulture));
         startInfo.ArgumentList.Add("--volume");
         startInfo.ArgumentList.Add(Math.Clamp(volume, 0, 100).ToString("0.##", CultureInfo.InvariantCulture));
         startInfo.ArgumentList.Add("--muted");
@@ -117,6 +117,12 @@ internal sealed class DvdPlaybackHostClient(IAppLogger logger) : IAsyncDisposabl
         await RequestValueAsync<MediaChapter[]>(
             "chapters",
             response => response.Chapters,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<DvdEditionInfo>> GetEditionsAsync(CancellationToken cancellationToken) =>
+        await RequestValueAsync<DvdEditionInfo[]>(
+            "editions",
+            response => response.Editions,
             cancellationToken).ConfigureAwait(false);
 
     public Task TogglePauseAsync(CancellationToken cancellationToken) =>

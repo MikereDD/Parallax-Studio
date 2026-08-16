@@ -1,4 +1,12 @@
-## Current optical-media milestone — v1.0-dev.5.5.3.1
+## Current optical-media milestone — v1.0-dev.5.5.5
+
+- Validate full-disc DVD title mapping across additional television and movie DVDs.
+
+- Reconcile MakeMKV DVD metadata with the program actually loaded by libdvdnav and keep the title browser refreshing until the verified match is visible.
+- Learn per-disc runtime/chapter mappings without risking the Parallax UI process.
+- Reuse verified mappings during later title selections in the same session.
+- Next: persist mappings and resolve still-unknown titles automatically.
+
 
 - DVD longest-title playback and direct numbered-title selection.
 - DVD episode/bonus discovery with serialized drive access and cancellation.

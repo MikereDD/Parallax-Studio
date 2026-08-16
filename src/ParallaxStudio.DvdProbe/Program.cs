@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using ParallaxStudio.Infrastructure.Playback;
 
 namespace ParallaxStudio.DvdProbe;
@@ -19,10 +20,10 @@ internal static class Program
         }
 
         var device = args[0];
-        var titleNumber = args.Length >= 2 && int.TryParse(args[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+        var titleSelector = args.Length >= 2 && int.TryParse(args[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
-            : 0;
-        var source = titleNumber > 0 ? $"dvd://{titleNumber}" : "dvd://";
+            : -1;
+        var source = titleSelector >= 0 ? $"dvd://{titleSelector}" : "dvd://";
 
         using var library = new LibMpvLibrary();
         nint context = nint.Zero;
@@ -59,6 +60,7 @@ internal static class Program
                     Console.WriteLine($"{item.Level}:{item.Kind}:{item.Prefix}:{item.Message}");
                     if (item.Kind == "file-loaded")
                     {
+                        WriteEditionMap(library, context);
                         Console.WriteLine("PROBE_OK");
                         return 0;
                     }
@@ -87,4 +89,33 @@ internal static class Program
             }
         }
     }
+    private static void WriteEditionMap(LibMpvLibrary library, nint context)
+    {
+        var count = ParseInt(library.GetProperty(context, "edition-list/count"));
+        var current = ParseInt(library.GetProperty(context, "edition"), -1);
+        for (var index = 0; index < count; index++)
+        {
+            var prefix = $"edition-list/{index}/";
+            var selector = ParseInt(library.GetProperty(context, prefix + "id"), index);
+            var title = library.GetProperty(context, prefix + "title") ?? string.Empty;
+            var duration = ParseEditionDuration(title);
+            var encodedTitle = Convert.ToBase64String(Encoding.UTF8.GetBytes(title));
+            Console.WriteLine($"DVD_EDITION|{selector}|{duration.TotalSeconds.ToString("R", CultureInfo.InvariantCulture)}|{(selector == current ? 1 : 0)}|{encodedTitle}");
+        }
+    }
+
+    private static TimeSpan ParseEditionDuration(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return TimeSpan.Zero;
+        var open = title.LastIndexOf('(');
+        var close = title.LastIndexOf(')');
+        if (open < 0 || close <= open + 1) return TimeSpan.Zero;
+        return TimeSpan.TryParse(title[(open + 1)..close], CultureInfo.InvariantCulture, out var duration)
+            ? duration
+            : TimeSpan.Zero;
+    }
+
+    private static int ParseInt(string? value, int fallback = 0) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) ? result : fallback;
+
 }

@@ -54,6 +54,8 @@ public sealed class MainViewModel : ObservableObject
     private Task? _discWatchTask;
     private string _discSnapshotKey = string.Empty;
     private readonly RelayCommand _cancelBluRayTitleDiscoveryCommand;
+    private bool _dvdReconciliationUiRefreshPending;
+    private string _lastDvdReconciliationUiSource = string.Empty;
 
     public MainViewModel(
         IPlaybackService playback,
@@ -747,7 +749,7 @@ public sealed class MainViewModel : ObservableObject
         title ??= SelectedBluRayTitle;
         if (title is null || _activeDisc is null) return;
 
-        if (title.IsActive)
+        if (title.IsActive && (_playback.Snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused))
         {
             StatusText = $"{_activeDisc.KindLabel} title {title.DisplayNumber} is already playing.";
             return;
@@ -758,6 +760,11 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             SelectedBluRayTitle = title;
+            if (_activeDisc.Kind == DiscKind.Dvd)
+            {
+                _lastDvdReconciliationUiSource = string.Empty;
+                _dvdReconciliationUiRefreshPending = false;
+            }
             StatusText = $"Switching to {_activeDisc.KindLabel} title {title.DisplayNumber}...";
             BluRayTitleSummary = $"Loading Title {title.DisplayNumber} — {title.DurationText}. Track and chapter metadata will refresh automatically.";
 
@@ -770,11 +777,17 @@ public sealed class MainViewModel : ObservableObject
 
             await RefreshMediaNavigationWithRetryAsync();
             await RefreshBluRayTitlesWithRetryAsync(title.Index); // uses the per-disc cache; no physical rescan
+            var activeTitle = BluRayTitles.FirstOrDefault(item => item.IsActive);
+            if (_activeDisc.Kind == DiscKind.Dvd && activeTitle is not null)
+                SelectedBluRayTitle = activeTitle;
+
             StatusText = _playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped
                 ? _activeDisc.Kind == DiscKind.BluRay
                     ? FormatBluRayFailure(_playback.LastPlaybackError)
                     : FormatDvdFailure(_playback.LastPlaybackError)
-                : $"{_activeDisc.KindLabel} title {title.DisplayNumber} is playing. Tracks, subtitles, chapters, duration, and timeline were refreshed.";
+                : _activeDisc.Kind == DiscKind.Dvd && activeTitle is not null && activeTitle.Index != title.Index
+                    ? $"DVD playback matched the loaded program to title {activeTitle.DisplayNumber} at {activeTitle.DurationText} using runtime and chapter data."
+                    : $"{_activeDisc.KindLabel} title {(activeTitle?.DisplayNumber ?? title.DisplayNumber)} is playing. Tracks, subtitles, chapters, duration, and timeline were refreshed.";
         }
         catch (Exception ex)
         {
@@ -887,16 +900,20 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        SelectedBluRayTitle = titles.FirstOrDefault(title => title.Index == selectionIndex)
-            ?? titles.FirstOrDefault(title => title.IsActive)
-            ?? titles.FirstOrDefault(title => title.IsLikelyMainFeature)
-            ?? titles[0];
-
         var active = titles.FirstOrDefault(title => title.IsActive);
+        SelectedBluRayTitle = disc.Kind == DiscKind.Dvd && active?.IsDvdMappingVerified == true
+            ? active
+            : titles.FirstOrDefault(title => title.Index == selectionIndex)
+                ?? active
+                ?? titles.FirstOrDefault(title => title.IsLikelyMainFeature)
+                ?? titles[0];
+
         var main = titles.FirstOrDefault(title => title.IsLikelyMainFeature);
         var episodeCount = titles.Count(title => title.IsLikelyEpisode);
         BluRayTitleSummary = active is not null
-            ? $"{titles.Count} titles discovered. Title {active.DisplayNumber} is playing at {active.DurationText}."
+            ? active.SourceKind == DiscKind.Dvd && active.DvdDisplayTitleNumber is int
+                ? $"{titles.Count} titles discovered. DVD title {active.DvdDisplayTitleNumber} matched title {active.DisplayNumber} at {active.DurationText}."
+                : $"{titles.Count} titles discovered. Title {active.DisplayNumber} is playing at {active.DurationText}."
             : episodeCount >= 2
                 ? $"{titles.Count} titles discovered, including {episodeCount} episode-length candidates. Select any title to play it directly."
                 : main is null
@@ -908,13 +925,33 @@ public sealed class MainViewModel : ObservableObject
         int? preferredSelectionIndex = null,
         CancellationToken cancellationToken = default)
     {
-        for (var attempt = 0; attempt < 8; attempt++)
+        const int maximumAttempts = 12;
+        for (var attempt = 0; attempt < maximumAttempts; attempt++)
         {
             await RefreshBluRayTitlesAsync(preferredSelectionIndex, cancellationToken);
-            if (BluRayTitles.Count > 0 && (BluRayTitles.Any(title => title.IsActive) || attempt >= 3))
+
+            var active = BluRayTitles.FirstOrDefault(title => title.IsActive);
+            if (_activeDisc?.Kind == DiscKind.Dvd)
+            {
+                // The first refresh can still contain the provisional metadata title.
+                // Wait for the playback service to reconcile the host runtime/chapter
+                // data and expose a verified metadata-to-dvd://N mapping.
+                if (active?.IsDvdMappingVerified == true)
+                {
+                    SelectedBluRayTitle = active;
+                    return;
+                }
+            }
+            else if (active is not null || (BluRayTitles.Count > 0 && attempt >= 3))
+            {
                 return;
+            }
+
             await Task.Delay(300, cancellationToken);
         }
+
+        // Keep playback usable even when an unusual DVD cannot be matched confidently.
+        // The last refresh still presents the provisional title instead of hanging the UI.
     }
 
 
@@ -1129,6 +1166,23 @@ public sealed class MainViewModel : ObservableObject
             if (!IsScrubbing) ScrubPosition = snapshot.Position.TotalSeconds;
             IsMuted = snapshot.IsMuted;
             PlayPauseText = snapshot.State == PlaybackState.Paused ? "Play" : "Pause";
+
+            // DVD reconciliation happens on the isolated playback polling thread just
+            // before the reconciled snapshot is published. Use that state event as the
+            // authoritative signal to refresh the title browser, rather than relying on
+            // a short timing-based retry window during initial loading.
+            if (_activeDisc?.Kind == DiscKind.Dvd &&
+                IsBluRayPanelOpen &&
+                snapshot.State is PlaybackState.Playing or PlaybackState.Paused &&
+                snapshot.Duration > TimeSpan.Zero &&
+                !BluRayTitles.Any(title => title.IsActive && title.IsDvdMappingVerified) &&
+                !_dvdReconciliationUiRefreshPending &&
+                !string.Equals(_lastDvdReconciliationUiSource, snapshot.Source, StringComparison.Ordinal))
+            {
+                _lastDvdReconciliationUiSource = snapshot.Source ?? string.Empty;
+                _dvdReconciliationUiRefreshPending = true;
+                _ = RefreshVerifiedDvdTitleUiAsync();
+            }
         }
 
         if (_shutdown || Application.Current is null) return;
@@ -1143,6 +1197,37 @@ public sealed class MainViewModel : ObservableObject
             // Never synchronously block the playback polling thread on the UI
             // dispatcher. Doing so can deadlock application shutdown.
             _ = dispatcher.BeginInvoke(Apply);
+        }
+    }
+
+
+    private async Task RefreshVerifiedDvdTitleUiAsync()
+    {
+        try
+        {
+            // Let the current dispatcher pass finish before replacing the observable
+            // title collection. The playback service has already committed the mapping.
+            await Task.Delay(125);
+            if (_shutdown || _activeDisc?.Kind != DiscKind.Dvd || !IsBluRayPanelOpen) return;
+
+            var preferredIndex = SelectedBluRayTitle?.Index;
+            await RefreshBluRayTitlesAsync(preferredIndex, CancellationToken.None);
+
+            var active = BluRayTitles.FirstOrDefault(title => title.IsActive && title.IsDvdMappingVerified);
+            if (active is null) return;
+
+            SelectedBluRayTitle = active;
+            BluRayTitleSummary = $"{BluRayTitles.Count} titles discovered. DVD title {active.DvdDisplayTitleNumber} matched title {active.DisplayNumber} at {active.DurationText}.";
+            StatusText = $"DVD playback matched the loaded program to title {active.DisplayNumber} at {active.DurationText} using runtime and chapter data.";
+            await _logger.InfoAsync($"DVD reconciliation UI applied: DVD title {active.DvdDisplayTitleNumber}, metadata title {active.DisplayNumber}, runtime {active.DurationText}.");
+        }
+        catch (Exception ex)
+        {
+            await _logger.WarningAsync($"DVD reconciliation UI refresh failed: {ex.Message}");
+        }
+        finally
+        {
+            _dvdReconciliationUiRefreshPending = false;
         }
     }
 

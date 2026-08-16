@@ -1,16 +1,78 @@
+# Parallax Studio
+# .NET / Visual Studio / Rider / VS Code build and user state
+
+# Build output
+[Bb]in/
+[Oo]bj/
+[Aa]rtifacts/
+[Pp]ublish/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+arm64/
+
+# Visual Studio
 .vs/
-.idea/
 *.user
+*.rsuser
 *.suo
 *.userosscache
 *.sln.docstates
-bin/
-obj/
-artifacts/
-publish/
-*.log
-native/*.dll
-!native/README.md
-native/.downloads/
+*.VC.db
+*.VC.VC.opendb
 
+# JetBrains Rider / ReSharper
+.idea/
+_ReSharper*/
+*.DotSettings.user
+
+# VS Code local workspace state
+.vscode/
+
+# Test / coverage / benchmark output
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+coverage.*
+BenchmarkDotNet.Artifacts/
+
+# NuGet / package output
+packages/
+*.nupkg
+*.snupkg
+
+# Logs / crash dumps / temporary files
+*.log
+*.dmp
+*.mdmp
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+*.rej
+
+# OS metadata
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Parallax native dependency bootstrap output
+native/.downloads/
+native/bootstrap.log
+native/*.dll
+native/*.pdb
 native-dependencies.lock.json
+
+# Keep native dependency documentation tracked
+!native/README.md
+
+# Local release/staging scratch directories
+staging/
+.cache/
+
+# Do not ignore source-controlled manifests, scripts, assets, or project files.

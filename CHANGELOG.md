@@ -1,3 +1,36 @@
+## 1.0-dev.5.5.5 — Full DVD Title Map
+
+- probes the DVD edition table once before the first selected-title playback
+- matches all usable MakeMKV entries to libdvdnav selectors by runtime
+- supports the zero-based `dvd://0` selector required for the first authored title
+- refuses to launch an unmapped entry instead of silently playing the wrong program
+- keeps isolated-host reconciliation as a post-load verification step
+
+## 1.0-dev.5.5.4.2 — DVD Reconciliation State-Event Hotfix
+
+- Refreshes the DVD title browser from the authoritative reconciled playback-state event.
+- Moves PLAYING and selection to the verified metadata title after runtime/chapter matching.
+- Removes dependence on the short initial-load retry window that could expire before the UI consumed the mapping.
+- Logs `DVD reconciliation UI applied` when the verified mapping reaches the title panel.
+
+## 1.0-dev.5.5.4.2 — DVD Reconciliation UI Refresh Hotfix
+
+- Keeps title refresh polling alive while a DVD entry is still using the provisional numeric mapping.
+- Waits for the playback service to expose a verified runtime/chapter match before completing the title-switch workflow.
+- Moves selection and the PLAYING badge to the reconciled metadata entry as soon as the verified mapping appears.
+- Preserves playback when an unusual disc cannot be matched confidently; the UI falls back to the provisional entry after the bounded retry window.
+- Retains the proven isolated DVD playback host and v1.0-dev.5.5.4 matching algorithm unchanged.
+
+## 1.0-dev.5.5.4 — DVD Title Reconciliation
+
+- Matches the actual isolated-host DVD runtime and chapter count back to MakeMKV discovery metadata.
+- Stops assuming that a MakeMKV title index is the same as libdvdnav `dvd://N`.
+- Learns verified per-disc mappings in memory as titles are played.
+- Reuses learned mappings when the matched title is selected again.
+- Moves the PLAYING badge and selected title to the entry that actually loaded.
+- Shows the verified DVD program number in title details and the discovery summary.
+- Keeps the isolated DVD playback architecture introduced in v1.0-dev.5.5.3.
+
 ## 1.0-dev.5.5.3.1 — Isolated DVD Host Build Hotfix
 
 - Fixed the `Task<MediaTrack[]>` to `Task<IReadOnlyList<MediaTrack>>` compile mismatch in the DVD host client.

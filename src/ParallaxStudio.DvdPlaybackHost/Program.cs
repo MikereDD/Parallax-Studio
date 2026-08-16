@@ -27,10 +27,10 @@ internal static class Program
             var device = Required(options, "device");
             var hwnd = long.Parse(Required(options, "parent-hwnd"), CultureInfo.InvariantCulture);
             var parentPid = int.Parse(Required(options, "parent-pid"), CultureInfo.InvariantCulture);
-            var titleNumber = ParseInt(options.GetValueOrDefault("title"));
+            var titleSelector = ParseInt(options.GetValueOrDefault("title"), -1);
             var volume = ParseDouble(options.GetValueOrDefault("volume"), 68);
             var muted = options.GetValueOrDefault("muted") == "1";
-            var source = titleNumber > 0 ? $"dvd://{titleNumber}" : "dvd://";
+            var source = titleSelector >= 0 ? $"dvd://{titleSelector}" : "dvd://";
 
             if (!Library.TryLoad(out var loadError))
                 throw new InvalidOperationException(loadError ?? "libmpv could not be loaded.");
@@ -52,8 +52,8 @@ internal static class Program
 
             _snapshot = new PlaybackSnapshot(
                 PlaybackState.Loading,
-                $"DVD disc • {device}{(titleNumber > 0 ? $" • title {titleNumber}" : string.Empty)}",
-                titleNumber > 0 ? $"DVD — Title {titleNumber}" : "DVD — Longest title",
+                $"DVD disc • {device}{(titleSelector >= 0 ? $" • title {titleSelector + 1}" : string.Empty)}",
+                titleSelector >= 0 ? $"DVD — Title {titleSelector + 1}" : "DVD — Longest title",
                 TimeSpan.Zero,
                 TimeSpan.Zero,
                 Math.Clamp(volume, 0, 100),
@@ -133,6 +133,8 @@ internal static class Program
                 return new DvdHostResponse(true, Tracks: (await ReadTracksAsync(cancellationToken).ConfigureAwait(false)).ToArray());
             case "chapters":
                 return new DvdHostResponse(true, Chapters: (await ReadChaptersAsync(cancellationToken).ConfigureAwait(false)).ToArray());
+            case "editions":
+                return new DvdHostResponse(true, Editions: (await ReadEditionsAsync(cancellationToken).ConfigureAwait(false)).ToArray());
             case "toggle-pause":
                 await WithMpvAsync(() =>
                 {
@@ -327,6 +329,37 @@ internal static class Program
             }
         }, cancellationToken).ConfigureAwait(false);
         return result;
+    }
+
+    private static async Task<IReadOnlyList<DvdEditionInfo>> ReadEditionsAsync(CancellationToken cancellationToken)
+    {
+        var result = new List<DvdEditionInfo>();
+        await WithMpvAsync(() =>
+        {
+            var count = ParseInt(Library.GetProperty(_context, "edition-list/count"));
+            var current = ParseInt(Library.GetProperty(_context, "edition"), -1);
+            for (var index = 0; index < count; index++)
+            {
+                var prefix = $"edition-list/{index}/";
+                var selector = ParseInt(Library.GetProperty(_context, prefix + "id"), index);
+                var title = Library.GetProperty(_context, prefix + "title");
+                var duration = ParseEditionDuration(title);
+                result.Add(new DvdEditionInfo(selector, duration, title, selector == current));
+            }
+        }, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    private static TimeSpan ParseEditionDuration(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return TimeSpan.Zero;
+        var open = title.LastIndexOf('(');
+        var close = title.LastIndexOf(')');
+        if (open < 0 || close <= open + 1) return TimeSpan.Zero;
+        var value = title[(open + 1)..close];
+        return TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out var duration)
+            ? duration
+            : TimeSpan.Zero;
     }
 
     private static async Task WithMpvAsync(Action action, CancellationToken cancellationToken)
