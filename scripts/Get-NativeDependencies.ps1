@@ -45,6 +45,40 @@ function Invoke-Download {
     }
 }
 
+function Assert-DependencyArchiveSha256 {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Dependency
+    )
+
+    $property = $Dependency.PSObject.Properties['archiveSha256']
+    if ($null -eq $property -or
+        [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+        return
+    }
+
+    $expected = ([string]$property.Value).ToLowerInvariant()
+    $actual = (
+        Get-FileHash -LiteralPath $Path -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+
+    if ($actual -ne $expected) {
+        Remove-Item -LiteralPath $Path `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+        throw (
+            "Archive checksum mismatch for {0}. " +
+            "Expected {1}, received {2}."
+        ) -f $Dependency.id, $expected, $actual
+    }
+
+    Write-BootstrapLog (
+        "Verified archive checksum for {0}: {1}" -f
+        $Dependency.id,
+        $actual
+    )
+}
 function Add-LockEntry {
     param([Parameter(Mandatory)]$Entries,[Parameter(Mandatory)]$Dependency,[string]$SourceUrl,[string]$ArchivePath)
     $target = Join-Path $native $Dependency.outputFile
@@ -90,6 +124,29 @@ try {
             Write-Host "Downloading pinned libmpv build $($mpv.version)..." -ForegroundColor Cyan
             Invoke-Download -Uri $mpv.downloadUrl -OutFile $archive
         } else { Write-Host "Using cached archive: $archive" -ForegroundColor DarkCyan }
+        try {
+            Assert-DependencyArchiveSha256 `
+                -Path $archive `
+                -Dependency $mpv
+        }
+        catch {
+            Write-Warning (
+                "Pinned libmpv archive verification failed. " +
+                "Downloading a clean copy once..."
+            )
+
+            Remove-Item -LiteralPath $archive `
+                -Force `
+                -ErrorAction SilentlyContinue
+
+            Invoke-Download `
+                -Uri $mpv.downloadUrl `
+                -OutFile $archive
+
+            Assert-DependencyArchiveSha256 `
+                -Path $archive `
+                -Dependency $mpv
+        }
         $extract = Join-Path $cache ('extract-mpv-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $extract | Out-Null
         try {
