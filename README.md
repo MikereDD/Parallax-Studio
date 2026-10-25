@@ -40,7 +40,17 @@ The picture remains on a native mpv HWND. The WPF shell and floating fullscreen 
 
 Now Playing looks for images beside a local media file, including a same-basename image (for example, `Arrival.mkv` with `Arrival.jpg`) and shared folder art named `poster.jpg`, `folder.jpg`, or `cover.jpg`. Keep artwork beside the media to use it without an online account or metadata service. Missing or unreadable artwork falls back to the built-in presentation.
 
-This pass does not add online poster lookup or extract embedded attachments from media containers. Disc labels, title names, runtime, and stream details still depend on what the disc and playback backend expose; structural disc labels cannot supply authoritative episode names.
+### Online artwork with TMDB
+
+If no local artwork is available, Parallax can optionally use a cached or exact-match TMDB poster without blocking playback. The resolver order is local artwork → Parallax TMDB cache → TMDB lookup → built-in fallback. Optical media is never crawled for artwork, so disc playback does not compete with the poster resolver.
+
+TMDB application authentication uses the API Read Access Token from the `PARALLAX_TMDB_TOKEN` environment variable. The token is not stored in `settings.json` or source control. Downloaded posters are cached under `%LOCALAPPDATA%\ParallaxStudio\cache\artwork\tmdb\` when caching is enabled.
+
+Parallax deliberately refuses ambiguous title-only TMDB results instead of guessing between remakes or movie/TV collisions. A bracketed year such as `Blade Runner 2049 [2017]` is used to disambiguate exact matches.
+
+TMDB requires attribution. Parallax displays the notice `This product uses the TMDB API but is not endorsed or certified by TMDB.` in Settings/Credits. Before a public build enables this integration, add one of TMDB's approved logo assets unchanged to that Credits presentation.
+
+Embedded cover extraction from media containers is still outside this pass. Disc labels, title names, runtime, and stream details continue to depend on what the disc and playback backend expose; structural disc labels cannot supply authoritative episode names.
 
 ## Requirements
 
