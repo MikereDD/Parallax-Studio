@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.IO.Pipes;
-using System.Text.Json;
 using ParallaxStudio.Core.Enums;
 using ParallaxStudio.Core.Models;
+using ParallaxStudio.Infrastructure.Playback;
 
 namespace ParallaxStudio.DvdHostStub;
 
@@ -18,6 +18,7 @@ namespace ParallaxStudio.DvdHostStub;
 ///   stall-snapshot    answer normally for PARALLAX_DVD_STUB_DELAY_MS after connecting, then
 ///                     print "STUB_STALL {pid}" and never answer the next "snapshot"
 /// The first stdout line is "STUB_PID {pid} MODE {mode}" so tests can track processes.
+/// Requests are served by DvdHostRequestLoop, the same loop the real host uses.
 /// </summary>
 internal static class Program
 {
@@ -49,61 +50,59 @@ internal static class Program
         var snapshot = new PlaybackSnapshot(
             PlaybackState.Playing, null, "Stub DVD", TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(44), 68, false);
 
-        while (await reader.ReadLineAsync() is { } line)
+        async Task<DvdHostResponse> HandleAsync(DvdHostRequest request, CancellationToken cancellationToken)
         {
-            var command = JsonDocument.Parse(line).RootElement.GetProperty("Command").GetString();
+            var command = request.Command;
             Console.WriteLine($"STUB_COMMAND {Environment.ProcessId} {command}");
 
             if (command != "hello" && mode == "hang-after-hello")
-                await Task.Delay(Timeout.Infinite);
+                await Task.Delay(Timeout.Infinite, cancellationToken);
 
             if (command == "snapshot" && mode == "stall-snapshot" && connectedAt.ElapsedMilliseconds >= delay)
             {
                 Console.WriteLine($"STUB_STALL {Environment.ProcessId}");
-                await Task.Delay(Timeout.Infinite);
+                await Task.Delay(Timeout.Infinite, cancellationToken);
             }
 
             switch (command)
             {
                 case "hello":
                 case "snapshot":
-                    await Send(writer, new { Ok = true, Snapshot = snapshot });
-                    break;
+                    return new DvdHostResponse(true, Snapshot: snapshot);
                 case "tracks":
-                    await Send(writer, new { Ok = true, Tracks = Array.Empty<MediaTrack>() });
-                    break;
+                    return new DvdHostResponse(true, Tracks: []);
                 case "chapters":
-                    await Send(writer, new { Ok = true, Chapters = Array.Empty<MediaChapter>() });
-                    break;
+                    return new DvdHostResponse(true, Chapters: []);
                 case "editions":
-                    await Send(writer, new { Ok = true, Editions = Array.Empty<object>() });
-                    break;
+                    return new DvdHostResponse(true, Editions: []);
                 case "toggle-pause":
                     snapshot = snapshot with { State = snapshot.State == PlaybackState.Paused ? PlaybackState.Playing : PlaybackState.Paused };
-                    await Send(writer, new { Ok = true });
-                    break;
-                case "shutdown":
-                    await Send(writer, new { Ok = true });
-                    if (mode == "ignore-shutdown") break;
-                    if (mode == "slow-teardown")
-                    {
-                        pipe.Dispose();
-                        await Task.Delay(delay);
-                    }
-                    return 0;
+                    return new DvdHostResponse(true);
                 default:
-                    await Send(writer, new { Ok = true });
-                    break;
+                    // Includes "shutdown": like the real host, only acknowledge here.
+                    return new DvdHostResponse(true);
             }
         }
 
-        if (mode == "ignore-shutdown")
+        while (true)
+        {
+            var acknowledgedShutdown = await DvdHostRequestLoop.RunAsync(reader, writer, HandleAsync, CancellationToken.None);
+            Console.WriteLine($"STUB_LOOP_END {Environment.ProcessId} shutdown={acknowledgedShutdown}");
+            if (!acknowledgedShutdown || mode != "ignore-shutdown") break;
+        }
+
+        if (mode == "slow-teardown")
+        {
+            pipe.Dispose();
+            await Task.Delay(delay);
+        }
+        else if (mode == "ignore-shutdown")
+        {
             await Task.Delay(Timeout.Infinite);
+        }
+
         return 0;
     }
-
-    private static Task Send(StreamWriter writer, object response) =>
-        writer.WriteLineAsync(JsonSerializer.Serialize(response));
 
     private static async Task WatchParentAsync(int parentPid)
     {

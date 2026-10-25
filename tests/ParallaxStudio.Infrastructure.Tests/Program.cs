@@ -36,6 +36,9 @@ internal static class Program
     {
         var checks = new (string Name, Func<Task> Run)[]
         {
+            ("protocol: shutdown is acknowledged before the request loop returns", ShutdownAcknowledgedBeforeLoopReturnsAsync),
+            ("protocol: a failing request gets an error response and the loop continues", FailingRequestKeepsLoopAsync),
+            ("client: graceful shutdown is acknowledged and the host exits normally", GracefulShutdownAcknowledgedAsync),
             ("client: repeated start/stop never throws and leaves no process", RepeatedStartStopAsync),
             ("client: hung request times out and breaks only that session", HungRequestTimesOutAsync),
             ("client: waiting for the I/O gate is bounded", IoGateWaitIsBoundedAsync),
@@ -86,7 +89,74 @@ internal static class Program
         return failed == 0 ? 0 : 1;
     }
 
+    // ----- DvdHostRequestLoop (server side, shared by the real host and the stub) -------
+
+    private static async Task ShutdownAcknowledgedBeforeLoopReturnsAsync()
+    {
+        var input = new StringReader(string.Join('\n',
+            Json(new DvdHostRequest("hello")),
+            Json(new DvdHostRequest("shutdown")),
+            Json(new DvdHostRequest("snapshot"))) + "\n");
+        var output = new StringWriter();
+        var handled = new List<string>();
+        using var stop = new CancellationTokenSource();
+
+        var acknowledged = await DvdHostRequestLoop.RunAsync(input, output, (request, _) =>
+        {
+            handled.Add(request.Command);
+            return Task.FromResult(new DvdHostResponse(true));
+        }, stop.Token);
+
+        var responses = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Check(acknowledged, "The loop must report that it ended on an acknowledged shutdown");
+        Check(handled.SequenceEqual(new[] { "hello", "shutdown" }), $"Requests after shutdown must not be served: {string.Join(",", handled)}");
+        Check(responses.Length == 2, $"Expected 2 responses (hello + shutdown ack), got {responses.Length}");
+        var ack = System.Text.Json.JsonSerializer.Deserialize<DvdHostResponse>(responses[1]);
+        Check(ack is { Ok: true }, "The shutdown acknowledgment must be written");
+    }
+
+    private static async Task FailingRequestKeepsLoopAsync()
+    {
+        var input = new StringReader(Json(new DvdHostRequest("broken")) + "\nnot json\n" + Json(new DvdHostRequest("hello")) + "\n");
+        var output = new StringWriter();
+        var acknowledged = await DvdHostRequestLoop.RunAsync(input, output, (request, _) =>
+            request.Command == "broken"
+                ? throw new InvalidOperationException("boom")
+                : Task.FromResult(new DvdHostResponse(true)), CancellationToken.None);
+
+        var responses = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => System.Text.Json.JsonSerializer.Deserialize<DvdHostResponse>(line)!)
+            .ToArray();
+        Check(!acknowledged, "End of input is not a shutdown");
+        Check(responses.Length == 3, $"Every request needs exactly one response, got {responses.Length}");
+        Check(!responses[0].Ok && responses[0].Error == "boom", "Handler failures must be reported");
+        Check(!responses[1].Ok, "Malformed requests must be reported");
+        Check(responses[2].Ok, "The loop must keep serving after a failure");
+    }
+
+    private static string Json(DvdHostRequest request) => System.Text.Json.JsonSerializer.Serialize(request);
+
     // ----- DvdPlaybackHostClient -------------------------------------------------------
+
+    private static async Task GracefulShutdownAcknowledgedAsync()
+    {
+        // Regression for the NETZACH log: "graceful shutdown failed (Disconnected): The
+        // isolated DVD playback host closed the control pipe during 'shutdown'."
+        var log = new TestLogger();
+        await using var client = NewClient(log);
+        UseStub("normal");
+        await client.StartAsync(1, Disc, null, 68, false, CancellationToken.None);
+        var pid = log.StubPids().Last();
+
+        await client.StopHostAsync(CancellationToken.None);
+
+        Check(!log.Contains("graceful shutdown failed"), "The shutdown request must be acknowledged");
+        Check(!log.Contains("terminating its process tree"), "A host that acknowledges shutdown must exit without being killed");
+        Check(log.Contains("exited with code 0x00000000"), "The host must exit normally with code 0");
+        Check(!IsAlive(pid), "The host process must be gone");
+        await WaitUntilAsync(() => log.Contains($"STUB_LOOP_END {pid} shutdown=True"), TimeSpan.FromSeconds(2), "the host loop to end on the acknowledged shutdown");
+        log.AssertNoErrors();
+    }
 
     private static async Task RepeatedStartStopAsync()
     {
@@ -103,6 +173,7 @@ internal static class Program
             var snapshot = await client.GetSnapshotAsync(CancellationToken.None);
             Check(snapshot.State == PlaybackState.Playing, "Stub snapshot must round-trip");
             await client.StopHostAsync(CancellationToken.None); // F1: used to throw ObjectDisposedException
+            Check(!log.Contains("graceful shutdown failed"), "Each graceful shutdown must be acknowledged");
             Check(client.GetStatus().Phase == DvdHostPhase.None, "No session may remain after stop");
         }
 

@@ -11,5 +11,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\ParallaxStudio.Core\ParallaxStudio.Core.csproj" />
+    <!-- Uses the host's real request/response loop (DvdHostRequestLoop). -->
+    <ProjectReference Include="..\..\src\ParallaxStudio.Infrastructure\ParallaxStudio.Infrastructure.csproj" />
   </ItemGroup>
 </Project>
