@@ -128,6 +128,7 @@ public sealed class TmdbArtworkService
 {
     public const string TokenEnvironmentVariable = "PARALLAX_TMDB_TOKEN";
     private const long MaximumPosterBytes = 16 * 1024 * 1024;
+    private const double RuntimeToleranceMinutes = 3.0;
     private const int MaximumDecodeDimension = 480;
     private const int MaximumSourceDimension = 32768;
 
@@ -166,23 +167,59 @@ public sealed class TmdbArtworkService
     public string GetCachePath(TmdbArtworkQuery query) =>
         Path.Combine(_cacheRoot, $"{query.CacheKey}.image");
 
+    private string? GetRuntimeCachePath(
+        TmdbArtworkQuery query,
+        TimeSpan? playbackDuration)
+    {
+        if (playbackDuration is not { } duration || duration <= TimeSpan.Zero)
+            return null;
+
+        var runtimeMinutes = (int)Math.Round(
+            duration.TotalMinutes,
+            MidpointRounding.AwayFromZero);
+
+        var identity = $"{query.CacheIdentity}|runtime:{runtimeMinutes}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
+
+        return Path.Combine(
+            _cacheRoot,
+            $"{Convert.ToHexString(hash).ToLowerInvariant()}.image");
+    }
+
     public async Task<ImageSource?> LoadAsync(
         string? source,
         string? playbackTitle,
         bool onlineEnabled,
         bool cacheEnabled,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TimeSpan? playbackDuration = null)
     {
         if (!onlineEnabled) return null;
 
         var query = TmdbArtworkQuery.Create(source, playbackTitle);
         if (query is null) return null;
 
-        var cachePath = GetCachePath(query);
+        var genericCachePath = GetCachePath(query);
+        var runtimeCachePath = GetRuntimeCachePath(query, playbackDuration);
+
         if (cacheEnabled)
         {
-            var cached = await LoadCachedAsync(cachePath, cancellationToken).ConfigureAwait(false);
-            if (cached is not null) return cached;
+            if (runtimeCachePath is not null)
+            {
+                var runtimeCached = await LoadCachedAsync(
+                    runtimeCachePath,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (runtimeCached is not null)
+                    return runtimeCached;
+            }
+
+            var cached = await LoadCachedAsync(
+                genericCachePath,
+                cancellationToken).ConfigureAwait(false);
+
+            if (cached is not null)
+                return cached;
         }
 
         if (!IsConfigured) return null;
@@ -192,6 +229,18 @@ public sealed class TmdbArtworkService
             var movieCandidates = await SearchAsync("movie", query, cancellationToken).ConfigureAwait(false);
             var movieMatches = EligibleExactCandidates(query, movieCandidates);
             var match = SelectBestCandidate(query, movieCandidates);
+            var resolvedByRuntime = false;
+
+            if (match is null && movieMatches.Length > 0)
+            {
+                match = await ResolveMovieByRuntimeAsync(
+                    movieMatches,
+                    playbackDuration,
+                    cancellationToken).ConfigureAwait(false);
+
+                resolvedByRuntime = match is not null;
+            }
+
 
             // Movie candidates existed but could not be resolved uniquely.
             // Do not turn a movie ambiguity into an unrelated TV match.
@@ -218,7 +267,17 @@ public sealed class TmdbArtworkService
             if (image is null) return null;
 
             if (cacheEnabled)
-                await SaveCacheAsync(cachePath, bytes, cancellationToken).ConfigureAwait(false);
+            {
+                var selectedCachePath =
+                    resolvedByRuntime && runtimeCachePath is not null
+                        ? runtimeCachePath
+                        : genericCachePath;
+
+                await SaveCacheAsync(
+                    selectedCachePath,
+                    bytes,
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             return image;
         }
@@ -281,6 +340,66 @@ public sealed class TmdbArtworkService
             exact = exact.Where(candidate => candidate.Year == requestedYear);
 
         return exact.ToArray();
+    }
+
+    private async Task<TmdbArtworkCandidate?> ResolveMovieByRuntimeAsync(
+        IReadOnlyList<TmdbArtworkCandidate> candidates,
+        TimeSpan? playbackDuration,
+        CancellationToken cancellationToken)
+    {
+        if (playbackDuration is not { } duration || duration <= TimeSpan.Zero)
+            return null;
+
+        // Keep detail lookup bounded. Extremely broad title collisions remain
+        // unresolved rather than producing a large set of HTTP requests.
+        if (candidates.Count is 0 or > 8)
+            return null;
+
+        var matches = new List<TmdbArtworkCandidate>();
+
+        foreach (var candidate in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var runtimeMinutes = await GetMovieRuntimeMinutesAsync(
+                candidate.Id,
+                cancellationToken).ConfigureAwait(false);
+
+            if (runtimeMinutes is not int minutes || minutes <= 0)
+                continue;
+
+            if (Math.Abs(minutes - duration.TotalMinutes) <= RuntimeToleranceMinutes)
+                matches.Add(candidate);
+        }
+
+        return matches.Count == 1
+            ? matches[0]
+            : null;
+    }
+
+    private async Task<int?> GetMovieRuntimeMinutesAsync(
+        int movieId,
+        CancellationToken cancellationToken)
+    {
+        var url =
+            $"https://api.themoviedb.org/3/movie/{movieId}?language=en-US";
+
+        using var response = await SendApiAsync(
+            url,
+            cancellationToken).ConfigureAwait(false);
+
+        if (response is null || !response.IsSuccessStatusCode)
+            return null;
+
+        await using var stream = await response.Content
+            .ReadAsStreamAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        using var document = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        return TryGetInt(document.RootElement, "runtime");
     }
 
     private async Task<IReadOnlyList<TmdbArtworkCandidate>> SearchAsync(

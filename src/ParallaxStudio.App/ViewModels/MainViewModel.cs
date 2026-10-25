@@ -69,6 +69,9 @@ public sealed class MainViewModel : ObservableObject
     private readonly TmdbArtworkService _tmdbArtworkService = new();
     private CancellationTokenSource? _artworkCancellation;
     private int _artworkLookupGeneration = -1;
+    private string? _artworkLookupTitle;
+    private TimeSpan _artworkLookupDuration;
+    private long _artworkRequestId;
     private ImageSource? _artwork;
     private string? _presentationSource;
     private int _mediaGeneration;
@@ -1531,10 +1534,42 @@ public sealed class MainViewModel : ObservableObject
             HasActiveMedia = snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused;
             NowPlayingTitle = HasActiveMedia ? snapshot.Title : "Nothing playing";
             SourceText = HasActiveMedia ? MediaPresentation.SourceSummary(snapshot.Source) : "Open a video to begin";
-            if (HasActiveMedia && _artworkLookupGeneration != _mediaGeneration)
+            var artworkSourceIsOptical = MediaPresentation.SourceKind(snapshot.Source) is "Blu-ray" or "DVD";
+            var artworkIdentityChanged =
+                _artworkLookupGeneration != _mediaGeneration ||
+                !string.Equals(
+                    _artworkLookupTitle,
+                    snapshot.Title,
+                    StringComparison.Ordinal) ||
+                (artworkSourceIsOptical &&
+                 _artworkLookupDuration <= TimeSpan.Zero &&
+                 snapshot.Duration > TimeSpan.Zero);
+
+            if (HasActiveMedia && artworkIdentityChanged)
             {
+                // Optical metadata can refine the provisional disc label after load.
+                // Restart artwork once when the authoritative title changes.
+                if (_artworkLookupGeneration == _mediaGeneration)
+                {
+                    _artworkCancellation?.Cancel();
+                    _artworkCancellation?.Dispose();
+                    _artworkCancellation = new CancellationTokenSource();
+                    Artwork = null;
+                }
+
+                _artworkCancellation ??= new CancellationTokenSource();
                 _artworkLookupGeneration = _mediaGeneration;
-                _ = LoadArtworkAsync(snapshot.Source, snapshot.Title, _mediaGeneration, _artworkCancellation!.Token);
+                _artworkLookupTitle = snapshot.Title;
+                _artworkLookupDuration = snapshot.Duration;
+                var artworkRequestId = ++_artworkRequestId;
+
+                _ = LoadArtworkAsync(
+                    snapshot.Source,
+                    snapshot.Title,
+                    snapshot.Duration,
+                    _mediaGeneration,
+                    artworkRequestId,
+                    _artworkCancellation.Token);
             }
             if (!HasActiveMedia)
             {
@@ -1721,6 +1756,9 @@ public sealed class MainViewModel : ObservableObject
         _artworkCancellation?.Dispose();
         _artworkCancellation = new CancellationTokenSource();
         _artworkLookupGeneration = -1;
+        _artworkLookupTitle = null;
+        _artworkLookupDuration = TimeSpan.Zero;
+        _artworkRequestId++;
         Artwork = null;
     }
 
@@ -1735,13 +1773,24 @@ public sealed class MainViewModel : ObservableObject
 
         var snapshot = _playback.Snapshot;
         _artworkLookupGeneration = _mediaGeneration;
-        _ = LoadArtworkAsync(snapshot.Source, snapshot.Title, _mediaGeneration, _artworkCancellation.Token);
+        _artworkLookupTitle = snapshot.Title;
+        _artworkLookupDuration = snapshot.Duration;
+        var artworkRequestId = ++_artworkRequestId;
+        _ = LoadArtworkAsync(
+            snapshot.Source,
+            snapshot.Title,
+            snapshot.Duration,
+            _mediaGeneration,
+            artworkRequestId,
+            _artworkCancellation.Token);
     }
 
     private async Task LoadArtworkAsync(
         string? source,
         string? title,
+        TimeSpan playbackDuration,
         int generation,
+        long artworkRequestId,
         CancellationToken cancellationToken)
     {
         try
@@ -1755,16 +1804,29 @@ public sealed class MainViewModel : ObservableObject
 
             if (artwork is null)
             {
+                var sourceKind = MediaPresentation.SourceKind(source);
+                TimeSpan? tmdbDuration =
+                    (sourceKind is "Blu-ray" or "DVD") && playbackDuration > TimeSpan.Zero
+                        ? playbackDuration
+                        : null;
+
                 artwork = await _tmdbArtworkService.LoadAsync(
                     source,
                     title,
                     _settings.OnlineArtworkEnabled,
                     _settings.CacheOnlineArtwork,
-                    cancellationToken);
+                    cancellationToken,
+                    tmdbDuration);
             }
 
-            if (!_shutdown && !cancellationToken.IsCancellationRequested && generation == _mediaGeneration)
+            if (!_shutdown &&
+                !cancellationToken.IsCancellationRequested &&
+                generation == _mediaGeneration &&
+                artworkRequestId == _artworkRequestId &&
+                string.Equals(source, _playback.Snapshot.Source, StringComparison.Ordinal))
+            {
                 Artwork = artwork;
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { await _logger.WarningAsync($"Artwork could not be loaded: {ex.Message}"); }

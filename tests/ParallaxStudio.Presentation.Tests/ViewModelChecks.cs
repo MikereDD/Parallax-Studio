@@ -201,7 +201,17 @@ internal static class ViewModelChecks
     private sealed class SettingsDouble : ISettingsService
     {
         public AppSettings? Saved { get; private set; }
-        public Task<AppSettings> LoadAsync(CancellationToken token = default) => Task.FromResult(JsonSerializer.Deserialize<AppSettings>("{\"SchemaVersion\":4}")!);
+        public Task<AppSettings> LoadAsync(CancellationToken token = default)
+        {
+            var loaded = JsonSerializer.Deserialize<AppSettings>("{\"SchemaVersion\":4}")!;
+
+            // Presentation tests exercise deterministic local artwork behavior.
+            // TMDB networking/cache behavior has its own isolated test suite.
+            loaded.OnlineArtworkEnabled = false;
+            loaded.CacheOnlineArtwork = false;
+
+            return Task.FromResult(loaded);
+        }
         public Task SaveAsync(AppSettings settings, CancellationToken token = default)
         { Saved = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(settings)); return Task.CompletedTask; }
     }

@@ -22,11 +22,13 @@ internal static class Program
             ("exact title and year selects poster", ExactTitleYearAsync),
             ("movie match wins before TV fallback", MovieWinsBeforeTvAsync),
             ("localized title collision prefers exact original title", LocalizedTitleCollisionPrefersOriginalAsync),
+            ("runtime disambiguates duplicate exact movie titles", RuntimeDisambiguatesMovieAsync),
             ("ambiguous title-only lookup is refused", AmbiguousTitleRefusedAsync),
             ("network failure degrades cleanly", NetworkFailureAsync),
             ("corrupt poster is rejected", CorruptPosterRejectedAsync),
             ("oversized poster is rejected", OversizedPosterRejectedAsync),
             ("cancellation is honored", CancellationAsync),
+            ("optical metadata branding is stripped", OpticalMetadataBrandingAsync),
             ("optical cache identity ignores drive letter", OpticalIdentityAsync)
         };
 
@@ -203,6 +205,81 @@ internal static class Program
             "TV search should not run after original-title disambiguation");
     }
 
+    private static async Task RuntimeDisambiguatesMovieAsync()
+    {
+        using var temp = new TempDirectory();
+
+        var handler = new FakeHandler(request =>
+        {
+            var url = request.RequestUri!.AbsoluteUri;
+
+            if (url.Contains("/search/movie", StringComparison.Ordinal))
+                return Json("""{"results":[{"id":20766,"title":"The Road","original_title":"The Road","release_date":"2009-11-25","poster_path":"/qLaXnLzqleBWQtjvZ6JGVSaKoC3.jpg"},{"id":810163,"title":"The Road","original_title":"The Road","release_date":"2017-10-31","poster_path":"/dUXB2SyfkARWEbYEkjMz2xj4Rfe.jpg"},{"id":1522744,"title":"The Road","original_title":"The Road","release_date":"2025-08-15","poster_path":"/oZt6Ed1bs8HncfuvvHtQ1FArJ44.jpg"},{"id":1275644,"title":"The Road","original_title":"The Road","release_date":"1963-09-29","poster_path":null}]}""");
+
+            if (url.Contains("/movie/20766", StringComparison.Ordinal))
+                return Json("""{"id":20766,"runtime":111}""");
+
+            if (url.Contains("/movie/810163", StringComparison.Ordinal))
+                return Json("""{"id":810163,"runtime":2}""");
+
+            if (url.Contains("/movie/1522744", StringComparison.Ordinal))
+                return Json("""{"id":1522744,"runtime":12}""");
+
+            if (url.EndsWith("/3/configuration", StringComparison.Ordinal))
+                return Json("""{"images":{"secure_base_url":"https://image.tmdb.org/t/p/","poster_sizes":["w342","w500","w780"]}}""");
+
+            if (url.Contains(
+                    "/w500/qLaXnLzqleBWQtjvZ6JGVSaKoC3.jpg",
+                    StringComparison.Ordinal))
+                return Bytes(TinyPng);
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        using var http = new HttpClient(handler);
+
+        var service = new TmdbArtworkService(
+            http,
+            "test-token",
+            temp.Path);
+
+        var result = await service.LoadAsync(
+            @"Blu-ray disc • D:\",
+            "The Road - Blu-ray™",
+            true,
+            true,
+            CancellationToken.None,
+            TimeSpan.FromMinutes(111) + TimeSpan.FromSeconds(20));
+
+        Expect(
+            result is not null,
+            "111-minute runtime should uniquely resolve The Road (2009)");
+
+        Expect(
+            handler.Urls.Any(url =>
+                url.Contains("/movie/20766", StringComparison.Ordinal)),
+            "runtime disambiguation should request movie details");
+
+        Expect(
+            handler.Urls.Any(url =>
+                url.Contains(
+                    "/w500/qLaXnLzqleBWQtjvZ6JGVSaKoC3.jpg",
+                    StringComparison.Ordinal)),
+            "runtime disambiguation should select the 2009 poster");
+
+        var genericQuery = TmdbArtworkQuery.Create(
+            @"Blu-ray disc • D:\",
+            "The Road - Blu-ray™")!;
+
+        Expect(
+            !File.Exists(service.GetCachePath(genericQuery)),
+            "runtime-resolved ambiguity must not poison the generic title cache");
+
+        Expect(
+            Directory.EnumerateFiles(temp.Path, "*.image").Count() == 1,
+            "runtime-resolved poster should create exactly one runtime-specific cache entry");
+    }
+
     private static async Task AmbiguousTitleRefusedAsync()
     {
         using var temp = new TempDirectory();
@@ -302,6 +379,24 @@ internal static class Program
         catch (OperationCanceledException)
         {
         }
+    }
+
+    private static Task OpticalMetadataBrandingAsync()
+    {
+        var query = TmdbArtworkQuery.Create(
+            @"Blu-ray disc • D:\",
+            "The Road - Blu-ray™")!;
+
+        Expect(query.Title == "The Road",
+            "Blu-ray branding should be removed from TMDB search title");
+
+        Expect(query.NormalizedTitle == "the road",
+            "branded Blu-ray metadata should normalize to the road");
+
+        Expect(query.CacheIdentity == "bluray|the road|",
+            "branded Blu-ray metadata should use the clean optical cache identity");
+
+        return Task.CompletedTask;
     }
 
     private static Task OpticalIdentityAsync()
