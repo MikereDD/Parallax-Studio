@@ -5,9 +5,10 @@
       "id": "libmpv",
       "required": true,
       "architecture": "x64-v3",
-      "version": "20260421-git-5921fe5",
-      "archiveName": "mpv-dev-x86_64-v3-20260421-git-5921fe5.7z",
-      "downloadUrl": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260421/mpv-dev-x86_64-v3-20260421-git-5921fe5.7z",
+      "version": "20261021-git-e471496c56",
+      "archiveName": "mpv-dev-x86_64-v3-20261021-git-e471496c56.7z",
+      "downloadUrl": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261021/mpv-dev-x86_64-v3-20261021-git-e471496c56.7z",
+      "archiveSha256": "e49e086c77085f850e20869feab7ab3ee6e514f8492f5495fb2adbabf42dc5d2",
       "outputFile": "libmpv-2.dll",
       "distribution": "bootstrap-download",
       "archiveType": "7z"
