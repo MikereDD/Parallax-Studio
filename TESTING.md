@@ -53,6 +53,8 @@ During the physical DVD regression, also confirm:
 6. Verify pause, seek, tracks, subtitles, chapters, fullscreen, stop, and title switching.
 7. Eject the disc and confirm the UI remains alive and clears stale optical-media state.
 
+8. On the Doctor Who Complete Series 2018 D13 disc, expect `Full DVD title map built with 8 confident matches`, with metadata 3, 4 and 5 labelled `(calibrated)`. Every title must play and log `DVD title reconciled … matched metadata title N`. Also check the mapping in the log. Metadata title 6 must still map to DVD title 8, and no title may be forced into sequential order. Record the `DVD title-map inputs` line and any `not mapped (ambiguous|unmatched)` warnings.
+
 Expected DVD log anchors include:
 
 ```text
