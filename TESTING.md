@@ -15,6 +15,34 @@
 4. Reopen an already populated title browser and confirm cached metadata appears immediately. For a fresh uncached scan, confirm Parallax stops optical playback first to avoid drive contention, then discovers titles without starting one automatically.
 5. Switch to a bonus title and verify tracks, subtitles, chapters, seeking, and fullscreen.
 
+## DVD playback-host lifecycle checks
+
+Run the automated host lifecycle checks on Windows with the .NET 10 SDK:
+
+```powershell
+.\scripts\Test-Infrastructure.ps1
+.\scripts\Test-Infrastructure.ps1 -Configuration Release
+```
+
+They launch `ParallaxStudio.DvdHostStub`, a test-only stand-in that speaks the real
+host protocol without loading libmpv, so no drive or disc is needed. They cover
+repeated start/stop, hung requests and I/O-gate timeouts, hosts that ignore shutdown,
+slow teardown, mid-session process death, cancelled and timed-out starts, and rapid
+concurrent replacement through both `DvdPlaybackHostClient` and `MpvPlaybackService`.
+They do not replace the physical DVD regression below.
+
+During the physical DVD regression, also confirm:
+
+1. Each title switch (C5 → stop → C1 → C2 … C4) succeeds on the first attempt.
+   `parallax-studio.log` shows `Stopping DVD host session N … replaced by a new DVD
+   host session` followed by `DVD host session N+1 connected`, with no
+   `ObjectDisposedException` and no `stopped responding` entry.
+2. Switching from DVD playback to a local file or Blu-ray works on the first attempt.
+3. Closing Parallax Studio during DVD playback exits within about 5 seconds and
+   leaves no `ParallaxStudio.DvdPlaybackHost.exe` in Task Manager.
+4. A slow disc spin-up never produces `did not answer 'snapshot' within 10 s`. If it
+   does, record the log section; the request timeout may need tuning for that drive.
+
 ## DVD full-title-map validation
 
 1. Insert a known TV/movie DVD and browse titles.

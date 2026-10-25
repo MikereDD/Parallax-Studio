@@ -1,5 +1,11 @@
 ## Unreleased
 
+- fixes DVD host teardown throwing `ObjectDisposedException` on every title switch or source change after DVD playback
+- bounds every DVD host IPC request, the per-session I/O gate wait, graceful shutdown, exit wait, and termination; a hung host is now reported as faulted and terminated instead of hanging playback controls and application exit
+- adds DVD host session ids and service routing generations so a superseded host's teardown or failure can no longer disown or fault its replacement
+- ensures cancelled or failed DVD starts terminate any partially started host
+- fixes the DVD host never sending its `shutdown` acknowledgment (it cancelled its own response write), which logged `graceful shutdown failed (Disconnected)` on every host stop
+- adds `ParallaxStudio.Infrastructure.Tests` with a protocol-compatible DVD host stub (`scripts/Test-Infrastructure.ps1`)
 - replaces the earlier app mark with the approved Parallax Studio cinematic `P` / play / film-strip icon
 - adds a 1024 px source raster, dedicated PNG sizes, and a multi-resolution Windows `.ico`
 - refreshes README, architecture, testing, roadmap, optical-media, native-runtime, and third-party documentation around the proven v1.0-dev.5.5.5 architecture

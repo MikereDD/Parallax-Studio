@@ -27,6 +27,17 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private readonly object _dvdMappingSync = new();
     private DvdPlaybackHostClient? _dvdHost;
     private bool _usingDvdHost;
+    // Ownership of DVD host routing. Every claim of (or release from) the DVD host path
+    // advances the generation under _dvdHostSync; the poll loop may fault playback only
+    // for the generation and host session it observed, so a superseded host's failure
+    // can never disown a newly started one.
+    private readonly object _dvdHostSync = new();
+    private long _dvdHostGeneration;
+    // Host session ids are monotonic per client. A generation claimed for a new start only
+    // accepts sessions created after the claim, so the session being replaced cannot
+    // publish state into, or fault, the new generation while the replacement is pending.
+    private long _minimumDvdSessionId;
+    private Func<IAppLogger, DvdPlaybackHostClient> _dvdHostFactory = static log => new DvdPlaybackHostClient(log);
     private bool _dvdHostReconciliationPending;
     private int _requestedDvdMetadataIndex = -1;
     private int _activeDvdPlaybackTitleNumber = -1;
@@ -42,6 +53,13 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private bool _disposed;
     private bool _paused;
     private string? _discDecryptionProvider;
+
+    /// <summary>Test seam: supplies the DVD host client (for example one pointing at a stub host).</summary>
+    internal MpvPlaybackService(IAppLogger logger, Func<IAppLogger, DvdPlaybackHostClient> dvdHostFactory)
+        : this(logger)
+    {
+        _dvdHostFactory = dvdHostFactory ?? throw new ArgumentNullException(nameof(dvdHostFactory));
+    }
 
     public event EventHandler<PlaybackStateChangedEventArgs>? StateChanged;
 
@@ -80,7 +98,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         try
         {
             _videoWindowHandle = windowHandle;
-            _dvdHost ??= new DvdPlaybackHostClient(logger);
+            _dvdHost ??= _dvdHostFactory(logger);
             if (IsInitialized) return;
             ConfigureDiscDecryptionProvider();
             if (!_library.TryLoad(out var loadError))
@@ -315,6 +333,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             throw new InvalidOperationException("The DVD drive is not ready.");
 
         await _discDiscoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        long generation = -1;
         try
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
@@ -330,6 +349,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             LastPlaybackError = null;
 
             await StopInternalPlaybackAsync(cancellationToken).ConfigureAwait(false);
+            generation = BeginDvdHostGeneration();
             SetSnapshot(Snapshot with
             {
                 State = PlaybackState.Loading,
@@ -339,8 +359,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 Duration = TimeSpan.Zero
             });
 
-            _dvdHost ??= new DvdPlaybackHostClient(logger);
-            _usingDvdHost = true;
+            _dvdHost ??= _dvdHostFactory(logger);
             await _dvdHost.StartAsync(
                 _videoWindowHandle,
                 disc,
@@ -350,10 +369,9 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 cancellationToken).ConfigureAwait(false);
             await logger.InfoAsync($"Started isolated DVD playback host for the longest title on {device}.", cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            _dvdHostReconciliationPending = false;
-            _usingDvdHost = false;
+            await AbandonDvdHostGenerationAsync(generation, ex).ConfigureAwait(false);
             throw;
         }
         finally
@@ -373,6 +391,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             throw new ArgumentOutOfRangeException(nameof(titleIndex));
 
         await _discDiscoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        long generation = -1;
         try
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
@@ -406,6 +425,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             LastPlaybackError = null;
 
             await StopInternalPlaybackAsync(cancellationToken).ConfigureAwait(false);
+            generation = BeginDvdHostGeneration();
             SetSnapshot(Snapshot with
             {
                 State = PlaybackState.Loading,
@@ -415,8 +435,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 Duration = TimeSpan.Zero
             });
 
-            _dvdHost ??= new DvdPlaybackHostClient(logger);
-            _usingDvdHost = true;
+            _dvdHost ??= _dvdHostFactory(logger);
             await _dvdHost.StartAsync(
                 _videoWindowHandle,
                 disc,
@@ -429,10 +448,9 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 $"Started isolated DVD playback host for DVD selector {dvdTitleNumber} (title {dvdTitleNumber + 1}) on {device} for metadata title {titleIndex + 1}{(mappingKnown ? " using the verified full-disc map" : " using a provisional fallback")}.",
                 cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            _dvdHostReconciliationPending = false;
-            _usingDvdHost = false;
+            await AbandonDvdHostGenerationAsync(generation, ex).ConfigureAwait(false);
             throw;
         }
         finally
@@ -1325,47 +1343,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             {
                 if (_usingDvdHost)
                 {
-                    if (_dvdHost is { IsActive: true })
-                    {
-                        try
-                        {
-                            var hostSnapshot = await _dvdHost.GetSnapshotAsync(cancellationToken).ConfigureAwait(false);
-                            if (_dvdHostReconciliationPending &&
-                                hostSnapshot.State is PlaybackState.Playing or PlaybackState.Paused &&
-                                hostSnapshot.Duration > TimeSpan.Zero)
-                            {
-                                await ReconcileDvdHostTitleAsync(hostSnapshot, cancellationToken).ConfigureAwait(false);
-                            }
-
-                            var presentedSnapshot = ApplyDvdHostPresentation(hostSnapshot);
-                            if (presentedSnapshot != Snapshot) SetSnapshot(presentedSnapshot);
-                        }
-                        catch (Exception ex)
-                        {
-                            LastPlaybackError = ex.Message;
-                            _dvdHostReconciliationPending = false;
-                            _usingDvdHost = false;
-                            SetSnapshot(Snapshot with { State = PlaybackState.Faulted });
-                            await logger.ErrorAsync("The isolated DVD playback host stopped responding.", ex, cancellationToken).ConfigureAwait(false);
-                        }
-                    }
-                    else
-                    {
-                        // A newly launched host can be alive while its named pipe and
-                        // libmpv context are still coming online. Keep the UI in Loading
-                        // rather than falsely reporting a crash during that window.
-                        if (_dvdHost is not null && _dvdHost.ExitCode is null)
-                            continue;
-
-                        var exitCode = _dvdHost?.ExitCode;
-                        LastPlaybackError = exitCode is int code
-                            ? $"The isolated DVD playback host exited with code 0x{unchecked((uint)code):X8}."
-                            : "The isolated DVD playback host exited unexpectedly.";
-                        _dvdHostReconciliationPending = false;
-                        _usingDvdHost = false;
-                        SetSnapshot(Snapshot with { State = PlaybackState.Faulted });
-                        await logger.ErrorAsync(LastPlaybackError ?? "The isolated DVD playback host exited unexpectedly.", cancellationToken: cancellationToken).ConfigureAwait(false);
-                    }
+                    await PollDvdHostAsync(cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -1716,10 +1694,206 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 
     private async Task StopDvdHostIfActiveAsync(CancellationToken cancellationToken)
     {
+        // Release routing first: the poll loop stops querying the host before it is torn
+        // down, and any in-flight failure belongs to a superseded generation.
+        EndDvdHostRouting();
         if (_dvdHost is not null)
             await _dvdHost.StopHostAsync(cancellationToken).ConfigureAwait(false);
-        _dvdHostReconciliationPending = false;
-        _usingDvdHost = false;
+    }
+
+    private long BeginDvdHostGeneration()
+    {
+        lock (_dvdHostSync)
+        {
+            _dvdHostGeneration++;
+            _minimumDvdSessionId = (_dvdHost?.SessionId ?? 0) + 1;
+            _usingDvdHost = true;
+            return _dvdHostGeneration;
+        }
+    }
+
+    private void EndDvdHostRouting()
+    {
+        lock (_dvdHostSync)
+        {
+            _dvdHostGeneration++;
+            _usingDvdHost = false;
+            _dvdHostReconciliationPending = false;
+        }
+    }
+
+    /// <summary>
+    /// Called when a DVD open fails. If this call had already claimed DVD routing, nothing
+    /// may keep playing outside the service's control, so routing is released and any host
+    /// (a previous one the start did not reach, or a partially started one) is stopped.
+    /// If the failure happened before the claim, the existing playback is left untouched.
+    /// </summary>
+    private async Task AbandonDvdHostGenerationAsync(long generation, Exception cause)
+    {
+        if (generation < 0) return;
+
+        bool owned;
+        lock (_dvdHostSync)
+        {
+            owned = generation == _dvdHostGeneration;
+            if (owned)
+            {
+                _dvdHostGeneration++;
+                _usingDvdHost = false;
+                _dvdHostReconciliationPending = false;
+            }
+        }
+
+        if (!owned || _dvdHost is null) return;
+
+        try
+        {
+            await _dvdHost.StopHostAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception cleanupEx) when (cleanupEx is AggregateException or TimeoutException)
+        {
+            await logger.ErrorAsync(
+                $"DVD playback could not be started ({cause.GetType().Name}: {cause.Message}) and the DVD host could not be stopped cleanly.",
+                cleanupEx,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private bool IsCurrentDvdHost(long generation, DvdPlaybackHostClient host, long sessionId) =>
+        generation == Volatile.Read(ref _dvdHostGeneration) &&
+        sessionId >= Volatile.Read(ref _minimumDvdSessionId) &&
+        ReferenceEquals(_dvdHost, host) &&
+        !host.IsTransitioning &&
+        host.SessionId == sessionId;
+
+    private async Task PollDvdHostAsync(CancellationToken cancellationToken)
+    {
+        var generation = Volatile.Read(ref _dvdHostGeneration);
+        var host = _dvdHost;
+        if (host is null) return;
+
+        // A host being started, replaced, or stopped is not polled. A newly launched host
+        // can be alive while its named pipe and libmpv context are still coming online;
+        // keep the UI in Loading rather than falsely reporting a crash during that window.
+        var status = host.GetStatus();
+        if (host.IsTransitioning || status.Phase is DvdHostPhase.None or DvdHostPhase.Starting)
+            return;
+
+        // A session that predates the current routing claim is being replaced; it is
+        // neither polled for state nor allowed to fault the new generation.
+        if (!IsCurrentDvdHost(generation, host, status.SessionId))
+            return;
+
+        if (status.Phase == DvdHostPhase.Connected)
+        {
+            try
+            {
+                var hostSnapshot = await host.GetSnapshotAsync(cancellationToken).ConfigureAwait(false);
+                if (!IsCurrentDvdHost(generation, host, status.SessionId))
+                    return;
+
+                if (_dvdHostReconciliationPending &&
+                    hostSnapshot.State is PlaybackState.Playing or PlaybackState.Paused &&
+                    hostSnapshot.Duration > TimeSpan.Zero)
+                {
+                    await ReconcileDvdHostTitleAsync(hostSnapshot, cancellationToken).ConfigureAwait(false);
+                }
+
+                var presentedSnapshot = ApplyDvdHostPresentation(hostSnapshot);
+                lock (_dvdHostSync)
+                {
+                    if (generation == _dvdHostGeneration && presentedSnapshot != Snapshot)
+                        SetSnapshot(presentedSnapshot);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (!IsCurrentDvdHost(generation, host, status.SessionId))
+            {
+                await logger.InfoAsync(
+                    $"Ignored a polling failure from superseded DVD host session {status.SessionId}: {ex.GetType().Name}: {ex.Message}",
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await FaultDvdHostAsync(generation, host, status.SessionId, ex.Message, "The isolated DVD playback host stopped responding.", ex, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return;
+        }
+
+        var exitCode = status.ExitCode;
+        var message = status.Phase == DvdHostPhase.Exited
+            ? exitCode is int code
+                ? $"The isolated DVD playback host exited with code 0x{unchecked((uint)code):X8}."
+                : "The isolated DVD playback host exited unexpectedly."
+            : $"The isolated DVD playback host stopped responding ({status.Reason ?? "connection lost"}).";
+        await FaultDvdHostAsync(generation, host, status.SessionId, message, message, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Faults playback for <paramref name="sessionId"/> only if it is still the routed host
+    /// of <paramref name="generation"/>, then reaps that session so a hung or broken host
+    /// cannot keep running uncontrolled. A replacement session is never touched.
+    /// </summary>
+    private async Task FaultDvdHostAsync(
+        long generation,
+        DvdPlaybackHostClient host,
+        long sessionId,
+        string playbackError,
+        string logMessage,
+        Exception? exception,
+        CancellationToken cancellationToken)
+    {
+        bool faulted;
+        lock (_dvdHostSync)
+        {
+            faulted = IsCurrentDvdHost(generation, host, sessionId);
+            if (faulted)
+            {
+                LastPlaybackError = playbackError;
+                _dvdHostReconciliationPending = false;
+                _usingDvdHost = false;
+                _dvdHostGeneration++;
+                SetSnapshot(Snapshot with { State = PlaybackState.Faulted });
+            }
+        }
+
+        if (!faulted)
+        {
+            await logger.InfoAsync(
+                $"Ignored a failure from superseded DVD host session {sessionId}: {playbackError}",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await logger.ErrorAsync(logMessage, exception, cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await host.StopSessionAsync(sessionId, "faulted during playback polling").ConfigureAwait(false);
+        }
+        catch (Exception cleanupEx) when (cleanupEx is AggregateException or TimeoutException)
+        {
+            await logger.ErrorAsync(
+                $"Faulted DVD host session {sessionId} could not be stopped cleanly.",
+                cleanupEx,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Test seam: provides the video surface handle and starts the playback poll loop
+    /// without loading libmpv, so DVD host routing can be exercised against a stub host.
+    /// </summary>
+    internal void StartPollingForTesting(nint videoWindowHandle)
+    {
+        _videoWindowHandle = videoWindowHandle;
+        _dvdHost ??= _dvdHostFactory(logger);
+        _pollTask ??= PollPlaybackAsync(_pollCancellation.Token);
     }
 
     private async Task WithInitializedContextAsync(Action<nint> action, CancellationToken cancellationToken)
@@ -1756,9 +1930,17 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         _pollCancellation.Cancel();
         if (_dvdHost is not null)
         {
-            try { await _dvdHost.DisposeAsync().ConfigureAwait(false); } catch { }
+            EndDvdHostRouting();
+            try
+            {
+                await _dvdHost.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is AggregateException or TimeoutException)
+            {
+                await logger.ErrorAsync("The isolated DVD playback host could not be stopped cleanly during shutdown.", ex, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
             _dvdHost = null;
-            _usingDvdHost = false;
         }
 
         if (_pollTask is not null)

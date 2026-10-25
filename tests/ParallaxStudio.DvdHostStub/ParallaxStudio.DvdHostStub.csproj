@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Test-only stand-in for ParallaxStudio.DvdPlaybackHost.exe. It speaks the same
+       newline-delimited JSON protocol but loads no native code, so host lifecycle
+       tests run without libmpv, libdvdcss, or an optical drive. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ParallaxStudio.DvdHostStub</RootNamespace>
+    <AssemblyName>ParallaxStudio.DvdHostStub</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ParallaxStudio.Core\ParallaxStudio.Core.csproj" />
+    <!-- Uses the host's real request/response loop (DvdHostRequestLoop). -->
+    <ProjectReference Include="..\..\src\ParallaxStudio.Infrastructure\ParallaxStudio.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

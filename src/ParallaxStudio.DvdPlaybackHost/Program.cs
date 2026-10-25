@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Pipes;
-using System.Text.Json;
 using ParallaxStudio.Core.Enums;
 using ParallaxStudio.Core.Models;
 using ParallaxStudio.Infrastructure.Playback;
@@ -74,25 +73,9 @@ internal static class Program
             Library.Command(_context, "loadfile", source, "replace");
             Console.WriteLine($"START source={source} device={device} hwnd={hwnd}");
 
-            while (!Shutdown.IsCancellationRequested && pipe.IsConnected)
-            {
-                var line = await reader.ReadLineAsync(Shutdown.Token).ConfigureAwait(false);
-                if (line is null) break;
-
-                DvdHostResponse response;
-                try
-                {
-                    var request = JsonSerializer.Deserialize<DvdHostRequest>(line)
-                        ?? throw new InvalidOperationException("Invalid DVD host request.");
-                    response = await HandleRequestAsync(request, Shutdown.Token).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    response = new DvdHostResponse(false, ex.Message);
-                }
-
-                await writer.WriteLineAsync(JsonSerializer.Serialize(response).AsMemory(), Shutdown.Token).ConfigureAwait(false);
-            }
+            // The loop returns after writing the "shutdown" acknowledgment; teardown starts
+            // only then, so the client receives the response before the pipe closes.
+            await DvdHostRequestLoop.RunAsync(reader, writer, HandleRequestAsync, Shutdown.Token).ConfigureAwait(false);
 
             Shutdown.Cancel();
             try { await pollTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
@@ -184,8 +167,9 @@ internal static class Program
             case "subtitle-delay":
                 await WithMpvAsync(() => Library.SetProperty(_context, "sub-delay", (request.Number ?? 0).ToString("0.###", CultureInfo.InvariantCulture)), cancellationToken).ConfigureAwait(false);
                 return new DvdHostResponse(true);
-            case "shutdown":
-                Shutdown.Cancel();
+            case DvdHostRequestLoop.ShutdownCommand:
+                // Acknowledge only. DvdHostRequestLoop writes this response and then returns;
+                // cancelling Shutdown here would cancel the acknowledgment write itself.
                 return new DvdHostResponse(true);
             default:
                 return new DvdHostResponse(false, $"Unknown DVD host command: {request.Command}");
