@@ -1,63 +1,790 @@
-<Window x:Class="ParallaxStudio.App.MainWindow"
- xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
- xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework" xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework" xmlns:interop="clr-namespace:ParallaxStudio.App.Interop"
- Title="Parallax Studio" Width="1380" Height="860" MinWidth="1020" MinHeight="680" WindowStartupLocation="CenterScreen" WindowStyle="None" ResizeMode="CanResize" KeyDown="Window_KeyDown" Loaded="Window_Loaded" Closing="Window_Closing" AllowDrop="True" DragOver="Window_DragOver" Drop="Window_Drop">
- <shell:WindowChrome.WindowChrome><shell:WindowChrome CaptionHeight="48" ResizeBorderThickness="7" CornerRadius="0" GlassFrameThickness="0" UseAeroCaptionButtons="False"/></shell:WindowChrome.WindowChrome>
- <Grid Background="{DynamicResource WindowBrush}">
-  <Grid.RowDefinitions><RowDefinition x:Name="TitleBarRow" Height="48"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <Border Grid.Row="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-   <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <StackPanel Orientation="Horizontal" Margin="16,0,0,0" VerticalAlignment="Center"><Image Source="Assets/parallax-studio-icon-256.png" Width="27" Height="27" Margin="0,0,11,0"/><TextBlock Text="{Binding AppTitle}" Style="{StaticResource TitleText}"/><Border Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="9" Padding="10,4" Margin="12,0,0,0"><TextBlock Text="PREMIUM TEST" Foreground="{DynamicResource AccentBrush}" FontSize="9" FontWeight="Bold"/></Border></StackPanel>
-    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0" shell:WindowChrome.IsHitTestVisibleInChrome="True">
-     <ComboBox Width="150" ItemsSource="{Binding ThemeNames}" SelectedItem="{Binding SelectedTheme, Mode=TwoWay}" ToolTip="Studio theme"/>
-     <ComboBox Width="112" Margin="8,0,0,0" ItemsSource="{Binding TypographyNames}" SelectedItem="{Binding SelectedTypography, Mode=TwoWay}" ToolTip="Typography profile"/>
-    </StackPanel>
-    <StackPanel Grid.Column="2" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True"><Button Content="&#xE921;" Style="{StaticResource CaptionButton}" Click="Minimize_Click"/><Button Content="&#xE922;" Style="{StaticResource CaptionButton}" Click="Maximize_Click"/><Button Content="&#xE8BB;" Style="{StaticResource CloseCaptionButton}" Click="Close_Click"/></StackPanel>
-   </Grid>
-  </Border>
-  <Grid x:Name="MainContentGrid" Grid.Row="1" Margin="20,18,20,12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="SidebarColumn" Width="Auto"/></Grid.ColumnDefinitions>
-   <Border x:Name="VideoBorder" Grid.Column="0" Background="#020304" BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" CornerRadius="18" ClipToBounds="True" Margin="0,0,14,0">
-    <Grid><Grid.RowDefinitions><RowDefinition Height="44"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-     <Border Grid.Row="0" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="14,0"><Grid><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Ellipse Width="7" Height="7" Fill="{DynamicResource AccentBrush}" Margin="0,0,8,0"/><TextBlock Text="PARALLAX CINEMA SURFACE" Style="{StaticResource SectionLabel}"/></StackPanel><StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="Your cinema, without the noise." Foreground="{DynamicResource TextMutedBrush}" FontSize="10" Margin="0,0,14,0"/><TextBlock Text="{Binding BackendText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="10"/></StackPanel></Grid></Border>
-     <interop:VideoSurfaceHost Grid.Row="1" x:Name="VideoHost" HandleCreated="VideoHost_HandleCreated"/>
+<Window x:Class="ParallaxStudio.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework" xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework" xmlns:interop="clr-namespace:ParallaxStudio.App.Interop" Title="Parallax Studio" Width="1380" Height="860" MinWidth="1020" MinHeight="680" WindowStartupLocation="CenterScreen" WindowStyle="None" ResizeMode="CanResize" KeyDown="Window_KeyDown" Loaded="Window_Loaded" Closing="Window_Closing" AllowDrop="True" DragOver="Window_DragOver" Drop="Window_Drop">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="48" ResizeBorderThickness="7" CornerRadius="0" GlassFrameThickness="0" UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <Style x:Key="TitleBarIconPicker" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="34" />
+            <Setter Property="MinHeight" Value="34" />
+            <!-- Inset the stock chevron so it no longer crowds the right outline. -->
+            <Setter Property="Padding" Value="0,0,6,0" />
+            <!-- Keep the selected string available to automation/keyboard behavior, but let the title bar show only the icon. -->
+            <Setter Property="Foreground" Value="Transparent" />
+        </Style>
+        <Style x:Key="CinemaChrome" TargetType="Border">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsFullscreen}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="MediaItemCard" TargetType="Border" BasedOn="{StaticResource InsetBorder}">
+            <Setter Property="Padding" Value="14,12" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" />
+                    <Setter Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <DataTemplate x:Key="TrackTemplate">
+            <Border>
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource MediaItemCard}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,10,0">
+                        <TextBlock Text="{Binding PrimaryText}" Foreground="{DynamicResource TextBrush}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding SecondaryText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Margin="0,5,0,0" TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SecondaryText}" Value="">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                    <Border x:Name="StateBadge" Grid.Column="1" Style="{StaticResource AccentBadgeBorder}" VerticalAlignment="Center" Visibility="Collapsed">
+                        <TextBlock Text="{Binding StateText}" Style="{StaticResource AccentBadgeText}" />
+                    </Border>
+                </Grid>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                    <Setter TargetName="StateBadge" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+    <Grid Background="{DynamicResource ShellBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="TitleBarRow" Height="48" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <!-- Lighting stays behind the shell. The native video host keeps its opaque surface. -->
+        <Border Grid.RowSpan="3" Background="{DynamicResource AtmosphereBrush}" IsHitTestVisible="False" />
+        <Border Grid.Row="0" Style="{StaticResource CinemaChrome}" Background="{DynamicResource SurfaceGradientBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Margin="20,0,16,0" VerticalAlignment="Center">
+                    <Image Source="Assets/parallax-studio-icon-256.png" Width="30" Height="30" Margin="0,0,11,0" RenderOptions.BitmapScalingMode="HighQuality" />
+                    <TextBlock Text="Parallax Studio" Style="{StaticResource TitleText}" ToolTip="{Binding AppTitle}" />
+                    <Border Style="{StaticResource BadgeBorder}" Margin="12,0,0,0" Padding="8,3" VerticalAlignment="Center">
+                        <TextBlock Text="CINEMA" Style="{StaticResource BadgeText}" />
+                    </Border>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Grid Width="46" Height="34">
+                        <ComboBox Style="{StaticResource TitleBarIconPicker}"
+                                  ItemsSource="{Binding ThemeNames}"
+                                  SelectedItem="{Binding SelectedTheme, Mode=TwoWay}"
+                                  ToolTip="{Binding SelectedTheme}"
+                                  AutomationProperties.Name="Studio theme" />
+                        <TextBlock Text="&#xE790;"
+                                   FontFamily="Segoe Fluent Icons"
+                                   FontSize="14"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,10,0"
+                                   IsHitTestVisible="False" />
+                    </Grid>
+                    <Grid Width="46" Height="34" Margin="7,0,0,0">
+                        <ComboBox Style="{StaticResource TitleBarIconPicker}"
+                                  ItemsSource="{Binding TypographyNames}"
+                                  SelectedItem="{Binding SelectedTypography, Mode=TwoWay}"
+                                  ToolTip="{Binding SelectedTypography}"
+                                  AutomationProperties.Name="Typography profile" />
+                        <TextBlock Text="Aa"
+                                   FontFamily="{DynamicResource StudioDisplayFontFamily}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,10,0"
+                                   IsHitTestVisible="False" />
+                    </Grid>
+                    <Button Content="&#xE713;" Style="{StaticResource IconButton}" Command="{Binding ToggleSettingsCommand}" Width="34" Height="34" Margin="7,0,0,0" ToolTip="Settings" AutomationProperties.Name="Open settings" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Content="" Style="{StaticResource CaptionButton}" Click="Minimize_Click" ToolTip="Minimize" AutomationProperties.Name="Minimize" />
+                    <Button Content="" Style="{StaticResource CaptionButton}" Click="Maximize_Click" ToolTip="Maximize or restore" AutomationProperties.Name="Maximize or restore" />
+                    <Button Content="" Style="{StaticResource CloseCaptionButton}" Click="Close_Click" ToolTip="Close" AutomationProperties.Name="Close" />
+                </StackPanel>
+            </Grid>
+        </Border>
+        <Grid x:Name="MainContentGrid" Grid.Row="1" Margin="20,18,20,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition x:Name="SidebarColumn" Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <!-- HWND video cannot be rasterized by WPF effects or covered by WPF overlays. -->
+            <Border x:Name="VideoBorder" Grid.Column="0">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource CinemaFrameBorder}">
+                        <Setter Property="Margin" Value="0,0,14,0" />
+                        <Style.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsCinemaSidebarHidden}" Value="True" />
+                                    <Condition Binding="{Binding IsBluRayPanelOpen}" Value="False" />
+                                    <Condition Binding="{Binding IsTracksPanelOpen}" Value="False" />
+                                    <Condition Binding="{Binding IsSettingsPanelOpen}" Value="False" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Margin" Value="0" />
+                            </MultiDataTrigger>
+                            <DataTrigger Binding="{Binding IsFullscreen}" Value="True">
+                                <Setter Property="Margin" Value="0" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Border Style="{StaticResource CinemaChrome}" Padding="20,17,20,15" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="PARALLAX / CINEMA" Style="{StaticResource EyebrowText}" />
+                                <TextBlock Text="{Binding NowPlayingTitle}" Foreground="{DynamicResource TextBrush}" FontSize="14" FontWeight="SemiBold" Margin="0,6,12,0" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="&#xE700;" Style="{StaticResource IconButton}" Command="{Binding ToggleSidebarCommand}" ToolTip="Show or hide sidebar" AutomationProperties.Name="Toggle sidebar" Margin="0,0,8,0" />
+                                <Button Content="" Style="{StaticResource IconButton}" Command="{Binding ToggleFullscreenCommand}" ToolTip="Fullscreen (F)" AutomationProperties.Name="Enter fullscreen" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1" Background="Black">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Margin" Value="8,8,8,0" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsFullscreen}" Value="True">
+                                        <Setter Property="Margin" Value="0" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <interop:VideoSurfaceHost x:Name="VideoHost" HandleCreated="VideoHost_HandleCreated" />
+                    </Border>
+                    <Border Grid.Row="2" Style="{StaticResource CinemaChrome}" Padding="18,12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding SourceText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" VerticalAlignment="Center" />
+                            <Border Grid.Column="1" Style="{StaticResource BadgeBorder}" MaxWidth="220" ToolTip="{Binding BackendText}">
+                                <TextBlock Text="{Binding BackendText}" Style="{StaticResource BadgeText}" TextTrimming="CharacterEllipsis" />
+                            </Border>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+            <ScrollViewer Grid.Column="1" Width="330" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,3,0" Focusable="False">
+                <ScrollViewer.Style>
+                    <Style TargetType="ScrollViewer">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsBluRayPanelOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsTracksPanelOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsSettingsPanelOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsCinemaSidebarHidden}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsFullscreen}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ScrollViewer.Style>
+                <StackPanel>
+                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <Grid>
+                                <TextBlock Text="NOW PLAYING" Style="{StaticResource EyebrowText}" VerticalAlignment="Center" />
+                                <Border Style="{StaticResource BadgeBorder}" HorizontalAlignment="Right">
+                                    <TextBlock>
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeText}">
+                                                <Setter Property="Text" Value="PAUSED" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding PlayPauseText}" Value="Pause">
+                                                        <Setter Property="Text" Value="PLAYING" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding EmptyStateVisibility}" Value="Visible">
+                                                        <Setter Property="Text" Value="READY" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+                            </Grid>
+                            <TextBlock Text="{Binding NowPlayingTitle}" Style="{StaticResource HeadlineText}" Margin="0,18,0,0" TextWrapping="Wrap" MaxHeight="94" TextTrimming="CharacterEllipsis" ToolTip="{Binding NowPlayingTitle}" />
+                            <TextBlock Text="{Binding SourceText}" Style="{StaticResource BodyText}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,8,0,0" ToolTip="{Binding SourceText}" />
+                            <Border Style="{StaticResource InsetBorder}" Padding="12" Margin="0,18,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="MEDIA DETAILS" Style="{StaticResource SectionLabel}" />
+                                    <TextBlock Text="{Binding MediaDetailsText}" Style="{StaticResource BodyText}" FontSize="11" Margin="0,6,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="YOUR SCREENING ROOM" Style="{StaticResource EyebrowText}" />
+                            <Button Style="{StaticResource PrimaryButton}" Command="{Binding OpenCommand}" Margin="0,14,0,10" ToolTip="Open a local video file">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE8B7;" FontFamily="Segoe Fluent Icons" Margin="0,0,9,0" VerticalAlignment="Center" />
+                                    <TextBlock Text="Open video" />
+                                </StackPanel>
+                            </Button>
+                            <UniformGrid Columns="2">
+                                <Button Content="Tracks &amp; chapters" Style="{StaticResource CommandButton}" Command="{Binding ToggleTracksCommand}" Margin="0,0,5,0" Padding="8,9" FontSize="11" />
+                                <Button Content="Fullscreen" Style="{StaticResource CommandButton}" Command="{Binding ToggleFullscreenCommand}" Margin="5,0,0,0" FontSize="11" />
+                            </UniformGrid>
+                            <TextBlock Text="Or drop a video into the window." Style="{StaticResource BodyText}" FontSize="11" Margin="0,12,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardBorder}">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="OPTICAL MEDIA" Style="{StaticResource EyebrowText}" />
+                                    <TextBlock Text="From disc to screen" Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="Scan" Style="{StaticResource CommandButton}" Command="{Binding ScanDiscsCommand}" Padding="12,7" MinHeight="32" />
+                            </Grid>
+                            <ItemsControl ItemsSource="{Binding Discs}" Margin="0,14,0,0" AutomationProperties.Name="Optical drives">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,0,8">
+                                            <Border.Style>
+                                                <Style TargetType="Border" BasedOn="{StaticResource InsetBorder}">
+                                                    <Setter Property="Padding" Value="12" />
+                                                    <Style.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" />
+                                                            <Setter Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <StackPanel>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Margin="0,0,8,0">
+                                                        <TextBlock Text="{Binding DisplayName}" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                        <TextBlock Text="{Binding DriveRoot}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" Margin="0,5,0,0" />
+                                                    </StackPanel>
+                                                    <Border Grid.Column="1" Style="{StaticResource BadgeBorder}" VerticalAlignment="Top">
+                                                        <TextBlock Text="{Binding KindLabel}" Style="{StaticResource BadgeText}" />
+                                                    </Border>
+                                                </Grid>
+                                                <Button Command="{Binding DataContext.PlayDiscCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" Margin="0,12,0,0">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource CommandButton}">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Setter Property="Content" Value="Play disc" />
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding IsReady}" Value="True" />
+                                                                        <Condition Binding="{Binding Kind}" Value="BluRay" />
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                    <Setter Property="Content" Value="Play main feature" />
+                                                                </MultiDataTrigger>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding IsReady}" Value="True" />
+                                                                        <Condition Binding="{Binding Kind}" Value="Dvd" />
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                    <Setter Property="Content" Value="Play longest title" />
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                                <Button Content="Browse titles" Command="{Binding DataContext.BrowseDiscTitlesCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" Margin="0,7,0,0">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource CommandButton}">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding IsReady}" Value="True" />
+                                                                        <Condition Binding="{Binding Kind}" Value="BluRay" />
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </MultiDataTrigger>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding IsReady}" Value="True" />
+                                                                        <Condition Binding="{Binding Kind}" Value="Dvd" />
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="Insert a Blu-ray or DVD, then scan to browse your disc.">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource BodyText}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Setter Property="Margin" Value="0,8,0,0" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Discs.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="Browsing titles keeps your screening uninterrupted." Style="{StaticResource BodyText}" FontSize="11" Margin="0,10,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+            <Border Grid.Column="1" Width="500" Panel.ZIndex="21">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource PanelBorder}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsBluRayPanelOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsFullscreen}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="YOUR DISC" Style="{StaticResource EyebrowText}" />
+                                <TextBlock Text="Titles &amp; extras" Style="{StaticResource HeadlineText}" Margin="0,6,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="12,0,0,0">
+                                <Button Content="Cancel scan" Command="{Binding CancelBluRayTitleDiscoveryCommand}" Padding="10,7" MinHeight="32" Margin="0,0,8,0">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource CommandButton}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsBluRayTitleDiscoveryBusy}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button Content="" Style="{StaticResource IconButton}" Command="{Binding ToggleBluRayPanelCommand}" ToolTip="Close titles" AutomationProperties.Name="Close disc titles" />
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="Blu-ray playlists, DVD programs and bonus features." Style="{StaticResource BodyText}" FontSize="11" Margin="0,10,0,0" />
+                    </StackPanel>
+                    <Border Grid.Row="1" Style="{StaticResource InsetBorder}" Padding="12" Margin="0,16,0,12">
+                        <TextBlock Text="{Binding BluRayTitleSummary}" Style="{StaticResource BodyText}" FontSize="11" />
+                    </Border>
+                    <ProgressBar Grid.Row="2" Height="3" IsIndeterminate="True" Margin="0,0,0,12" Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource SurfaceRaisedBrush}">
+                        <ProgressBar.Style>
+                            <Style TargetType="ProgressBar">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsBluRayTitleDiscoveryBusy}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ProgressBar.Style>
+                    </ProgressBar>
+                    <ListBox x:Name="BluRayTitleList" Grid.Row="3" Style="{StaticResource MediaListBox}" Tag="No title metadata was reported. Direct disc playback remains available." ItemsSource="{Binding BluRayTitles}" SelectedItem="{Binding SelectedBluRayTitle, Mode=TwoWay}" AutomationProperties.Name="Disc titles">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border x:Name="TitleCard">
+                                    <Border.Style>
+                                        <Style TargetType="Border" BasedOn="{StaticResource MediaItemCard}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsLikelyMainFeature}" Value="True">
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding PrimaryText}" Foreground="{DynamicResource TextBrush}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding DetailText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" />
+                                        <WrapPanel Margin="0,12,0,0">
+                                            <Border x:Name="ClassificationBadge" Style="{StaticResource BadgeBorder}" Margin="0,0,8,4">
+                                                <TextBlock Text="{Binding ClassificationText}" Style="{StaticResource BadgeText}" />
+                                            </Border>
+                                            <Border x:Name="PlayingBadge" Style="{StaticResource AccentBadgeBorder}" Visibility="Collapsed" Margin="0,0,0,4">
+                                                <TextBlock Text="PLAYING" Style="{StaticResource AccentBadgeText}" />
+                                            </Border>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsLikelyMainFeature}" Value="True">
+                                        <Setter TargetName="ClassificationBadge" Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                        <Setter TargetName="PlayingBadge" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Grid.Row="4" Content="Play selected title" Style="{StaticResource PrimaryButton}" Command="{Binding PlayBluRayTitleCommand}" CommandParameter="{Binding SelectedBluRayTitle}" Margin="0,14,0,0" />
+                </Grid>
+            </Border>
+            <Border Grid.Column="1" Width="520" Panel.ZIndex="20">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource PanelBorder}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsTracksPanelOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsFullscreen}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="MAKE IT YOURS" Style="{StaticResource EyebrowText}" />
+                            <TextBlock Text="Sound &amp; navigation" Style="{StaticResource HeadlineText}" Margin="0,6,0,0" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="" Style="{StaticResource IconButton}" Command="{Binding ToggleTracksCommand}" ToolTip="Close tracks" AutomationProperties.Name="Close tracks and chapters" VerticalAlignment="Top" />
+                    </Grid>
+                    <TabControl Grid.Row="1" Margin="0,18,0,0" SelectedIndex="0" AutomationProperties.Name="Media navigation">
+                        <TabItem Header="Audio">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <ListBox Style="{StaticResource MediaListBox}" Tag="Audio tracks are still loading or were not reported by the disc." ItemsSource="{Binding AudioTracks}" ItemTemplate="{StaticResource TrackTemplate}" SelectionChanged="AudioTracks_SelectionChanged" AutomationProperties.Name="Audio tracks" />
+                                <TextBlock Grid.Row="1" Text="Switch audio streams without interrupting playback. Your current stream is marked ACTIVE." Style="{StaticResource BodyText}" FontSize="11" Margin="0,12,0,0" />
+                            </Grid>
+                        </TabItem>
+                        <TabItem Header="Subtitles">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <ListBox Style="{StaticResource MediaListBox}" Tag="No embedded subtitles were found. Load an external subtitle file below." ItemsSource="{Binding SubtitleTracks}" ItemTemplate="{StaticResource TrackTemplate}" SelectionChanged="SubtitleTracks_SelectionChanged" AutomationProperties.Name="Subtitle tracks" />
+                                <Button Grid.Row="1" Content="Load external subtitle" Style="{StaticResource CommandButton}" Command="{Binding LoadSubtitleCommand}" Margin="0,12,0,0" />
+                                <Grid Grid.Row="2" Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Subtitle delay" Style="{StaticResource BodyText}" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1" Content="−0.1" Style="{StaticResource CommandButton}" Command="{Binding SubtitleDelayBackCommand}" Padding="10,6" MinHeight="32" AutomationProperties.Name="Decrease subtitle delay" />
+                                    <TextBlock Grid.Column="2" Text="{Binding SubtitleDelayText}" Foreground="{DynamicResource AccentBrush}" Margin="12,0" VerticalAlignment="Center" />
+                                    <Button Grid.Column="3" Content="+0.1" Style="{StaticResource CommandButton}" Command="{Binding SubtitleDelayForwardCommand}" Padding="10,6" MinHeight="32" AutomationProperties.Name="Increase subtitle delay" />
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+                        <TabItem Header="Chapters">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <ListBox Style="{StaticResource MediaListBox}" Tag="This media does not contain chapter markers." ItemsSource="{Binding Chapters}" SelectionChanged="Chapters_SelectionChanged" AutomationProperties.Name="Chapters">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border>
+                                                <Border.Style>
+                                                    <Style TargetType="Border" BasedOn="{StaticResource MediaItemCard}">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="64" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding TimeText}" Foreground="{DynamicResource AccentBrush}" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding PrimaryText}" Foreground="{DynamicResource TextBrush}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,8,0" />
+                                                    <Border Grid.Column="2" x:Name="NowBadge" Style="{StaticResource AccentBadgeBorder}" Visibility="Collapsed" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding StateText}" Style="{StaticResource AccentBadgeText}" />
+                                                    </Border>
+                                                </Grid>
+                                            </Border>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                    <Setter TargetName="NowBadge" Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <UniformGrid Grid.Row="1" Columns="2" Margin="0,12,0,0">
+                                    <Button Content="Previous chapter" Style="{StaticResource CommandButton}" Command="{Binding PreviousChapterCommand}" Margin="0,0,5,0" />
+                                    <Button Content="Next chapter" Style="{StaticResource CommandButton}" Command="{Binding NextChapterCommand}" Margin="5,0,0,0" />
+                                </UniformGrid>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </Border>
+            <Border Grid.Column="1" Width="520" Panel.ZIndex="30">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource PanelBorder}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsSettingsPanelOpen}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsFullscreen}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="PARALLAX / SETTINGS" Style="{StaticResource EyebrowText}" />
+                            <TextBlock Text="Cinema behavior" Style="{StaticResource HeadlineText}" Margin="0,6,0,0" />
+                            <TextBlock Text="Tune how Parallax gets out of the way when the movie starts." Style="{StaticResource BodyText}" FontSize="11" Margin="0,8,20,0" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="" Style="{StaticResource IconButton}" Command="{Binding ToggleSettingsCommand}" ToolTip="Close settings" AutomationProperties.Name="Close settings" VerticalAlignment="Top" />
+                    </Grid>
+                    <ScrollViewer Grid.Row="1" Margin="0,18,0,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="0,0,4,0">
+                            <TextBlock Text="CINEMA" Style="{StaticResource EyebrowText}" Margin="0,0,0,9" />
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Cinema Auto-Expand" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Hide the right sidebar while video is playing so the cinema surface takes the space." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding CinemaAutoExpand, Mode=TwoWay}" AutomationProperties.Name="Cinema Auto-Expand"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Show sidebar when paused" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Bring controls and disc tools back when playback is paused." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding ShowSidebarWhenPaused, Mode=TwoWay}" AutomationProperties.Name="Show sidebar when paused"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Restore sidebar when playback stops" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Return to the full Studio layout after a movie or title stops." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding RestoreSidebarWhenPlaybackStops, Mode=TwoWay}" AutomationProperties.Name="Restore sidebar when playback stops"/>
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Text="FULLSCREEN" Style="{StaticResource EyebrowText}" Margin="0,12,0,9" />
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="True fullscreen" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Hide the normal transport deck so video uses the entire display." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding FullscreenHideTransport, Mode=TwoWay}" AutomationProperties.Name="Hide transport in fullscreen"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Controls on mouse movement" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Reveal a floating fullscreen transport when you move the mouse." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding FullscreenShowControlsOnMouseMove, Mode=TwoWay}" AutomationProperties.Name="Show fullscreen controls on mouse movement"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Control auto-hide" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Seconds before fullscreen controls fade away." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><ComboBox Width="78" ItemsSource="{Binding FullscreenControlTimeoutOptions}" SelectedItem="{Binding FullscreenControlsAutoHideSeconds, Mode=TwoWay}" AutomationProperties.Name="Fullscreen control auto-hide seconds"/><TextBlock Text="s" Foreground="{DynamicResource TextMutedBrush}" Margin="7,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Hide cursor when idle" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Remove the pointer once fullscreen controls auto-hide." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding FullscreenCursorAutoHide, Mode=TwoWay}" AutomationProperties.Name="Hide cursor in fullscreen"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="ESC exits fullscreen" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Keep Escape as the fast way back to Studio mode." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding EscapeExitsFullscreen, Mode=TwoWay}" AutomationProperties.Name="Escape exits fullscreen"/>
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Text="WINDOW" Style="{StaticResource EyebrowText}" Margin="0,12,0,9" />
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Remember window position" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Restore the last size, position and maximized state on launch." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding RememberWindowGeometry, Mode=TwoWay}" AutomationProperties.Name="Remember window position"/>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+        <Border x:Name="TransportDeck" Grid.Row="2" Margin="20,0,20,18">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource TransportBorder}">
+                    <Style.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsFullscreen}" Value="True" />
+                                <Condition Binding="{Binding FullscreenHideTransport}" Value="True" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekBackCommand}" ToolTip="Back 5 seconds (←)" AutomationProperties.Name="Back 5 seconds" />
+                        <Button Content="{Binding PlayPauseGlyph}" Style="{StaticResource PrimaryButton}" Command="{Binding PlayPauseCommand}" Width="62" Height="48" Margin="8,0" FontFamily="Segoe Fluent Icons" FontSize="19" Padding="0" ToolTip="Play or pause (Space)" AutomationProperties.Name="{Binding PlayPauseText}" />
+                        <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekForwardCommand}" ToolTip="Forward 5 seconds (→)" AutomationProperties.Name="Forward 5 seconds" />
+                        <Button Content="" Style="{StaticResource IconButton}" Command="{Binding StopCommand}" ToolTip="Stop playback" AutomationProperties.Name="Stop playback" Margin="8,0,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="24,0" VerticalAlignment="Center">
+                        <Grid Margin="1,0,1,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding PositionText}" Foreground="{DynamicResource TextBrush}" FontFamily="Consolas" FontSize="12" />
+                            <TextBlock Grid.Column="1" Text="{Binding NowPlayingTitle}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis" TextAlignment="Center" Margin="12,0" />
+                            <TextBlock Grid.Column="2" Text="{Binding DurationText}" Foreground="{DynamicResource TextSecondaryBrush}" FontFamily="Consolas" FontSize="12" />
+                        </Grid>
+                        <Slider x:Name="TimelineSlider" Minimum="0" Maximum="{Binding DurationSeconds}" Value="{Binding ScrubPosition, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewMouseLeftButtonDown="TimelineSlider_PreviewMouseLeftButtonDown" PreviewKeyDown="TimelineSlider_PreviewKeyDown" KeyUp="TimelineSlider_KeyUp" LostKeyboardFocus="TimelineSlider_LostKeyboardFocus" primitives:Thumb.DragStarted="TimelineSlider_DragStarted" primitives:Thumb.DragCompleted="TimelineSlider_DragCompleted" ToolTip="Click or drag to seek" AutomationProperties.Name="Playback position" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="{Binding MuteGlyph}" Style="{StaticResource IconButton}" Command="{Binding ToggleMuteCommand}" ToolTip="Mute or unmute (M)" AutomationProperties.Name="Mute or unmute" Margin="0,0,8,0" />
+                        <Slider Width="90" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}" ToolTip="Volume" AutomationProperties.Name="Volume" />
+                        <TextBlock Text="{Binding Volume, StringFormat={}{0:0}%}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Width="38" TextAlignment="Right" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+                <Grid Grid.Row="1" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding StatusText}" Margin="0,0,16,0" />
+                    <TextBlock Grid.Column="1" Text="SPACE  Play / pause     ← →  Seek     F  Fullscreen" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" />
+                </Grid>
+            </Grid>
+        </Border>
     </Grid>
-   </Border>
-   <StackPanel Grid.Column="1" Width="330">
-    <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding IsBluRayPanelOpen}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger><DataTrigger Binding="{Binding IsTracksPanelOpen}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
-    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12"><StackPanel><TextBlock Text="NOW PLAYING" Style="{StaticResource SectionLabel}"/><TextBlock Text="{Binding NowPlayingTitle}" FontFamily="{DynamicResource StudioDisplayFontFamily}" Foreground="{DynamicResource TextBrush}" FontSize="21" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="0,11,0,0"/><TextBlock Text="{Binding SourceText}" Style="{StaticResource BodyText}" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/><Border Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="11" Padding="12" Margin="0,16,0,0"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="PLAYBACK FOUNDATION" Style="{StaticResource SectionLabel}"/><TextBlock Text="{Binding MediaDetailsText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/></StackPanel><Ellipse Grid.Column="1" Width="9" Height="9" Fill="{DynamicResource AccentBrush}" VerticalAlignment="Center"/></Grid></Border></StackPanel></Border>
-    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12"><StackPanel><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="QUICK ACTIONS" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/><Button Grid.Column="1" Content="Open" Style="{StaticResource CommandButton}" Command="{Binding OpenCommand}" Padding="12,6" MinHeight="0"/></Grid><UniformGrid Columns="2" Margin="0,12,0,0"><Button Content="Tracks &amp; Chapters" Style="{StaticResource CommandButton}" Command="{Binding ToggleTracksCommand}" Margin="0,0,5,0"/><Button Content="Fullscreen" Style="{StaticResource CommandButton}" Command="{Binding ToggleFullscreenCommand}" Margin="5,0,0,0"/></UniformGrid></StackPanel></Border>
-    <Border Style="{StaticResource CardBorder}"><StackPanel><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="OPTICAL MEDIA" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/><Button Grid.Column="1" Content="Scan" Style="{StaticResource CommandButton}" Command="{Binding ScanDiscsCommand}" Padding="10,6" MinHeight="0"/></Grid><ListBox ItemsSource="{Binding Discs}" Margin="0,12,0,0" MaxHeight="190"><ListBox.ItemTemplate><DataTemplate><Border Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="11" Padding="11" Margin="0,0,0,7"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="{Binding DisplayName}" Foreground="{DynamicResource TextBrush}" FontSize="12" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding DriveRoot}" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" Margin="0,3,0,0"/></StackPanel><TextBlock Grid.Column="1" Text="{Binding KindLabel}" Foreground="{DynamicResource AccentBrush}" FontSize="10" VerticalAlignment="Center"/></Grid><UniformGrid Grid.Row="1" Columns="2" Margin="0,10,0,0"><Button Command="{Binding DataContext.PlayDiscCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" Margin="0,0,4,0"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="Content" Value="Play disc"/><Style.Triggers><MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding IsReady}" Value="True"/><Condition Binding="{Binding Kind}" Value="BluRay"/></MultiDataTrigger.Conditions><Setter Property="Visibility" Value="Visible"/><Setter Property="Content" Value="Play main feature"/></MultiDataTrigger><MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding IsReady}" Value="True"/><Condition Binding="{Binding Kind}" Value="Dvd"/></MultiDataTrigger.Conditions><Setter Property="Visibility" Value="Visible"/><Setter Property="Content" Value="Play longest title"/></MultiDataTrigger></Style.Triggers></Style></Button.Style></Button><Button Content="Browse titles" Command="{Binding DataContext.BrowseDiscTitlesCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" Margin="4,0,0,0"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding IsReady}" Value="True"/><Condition Binding="{Binding Kind}" Value="BluRay"/></MultiDataTrigger.Conditions><Setter Property="Visibility" Value="Visible"/></MultiDataTrigger><MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding IsReady}" Value="True"/><Condition Binding="{Binding Kind}" Value="Dvd"/></MultiDataTrigger.Conditions><Setter Property="Visibility" Value="Visible"/></MultiDataTrigger></Style.Triggers></Style></Button.Style></Button></UniformGrid></Grid></Border></DataTemplate></ListBox.ItemTemplate></ListBox><TextBlock Text="Blu-ray playback uses MakeMKV LibMMBD when available. DVD playback uses libdvdcss when present. Title discovery never auto-starts playback." Style="{StaticResource BodyText}" Margin="0,6,0,0" TextWrapping="Wrap"/></StackPanel></Border>
-   </StackPanel>
-   <Border Grid.Column="1" Width="500" HorizontalAlignment="Right" VerticalAlignment="Stretch" Padding="18" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" CornerRadius="18" Panel.ZIndex="21">
-    <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsBluRayPanelOpen}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
-    <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-     <Grid><StackPanel><TextBlock Text="DISC TITLE DISCOVERY" Style="{StaticResource SectionLabel}"/><TextBlock Text="Blu-ray playlists, DVD episodes, extras &amp; direct title selection" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" Margin="0,4,0,0"/></StackPanel><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="Cancel scan" Command="{Binding CancelBluRayTitleDiscoveryCommand}" Padding="12,6" MinHeight="0" Margin="0,0,8,0"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsBluRayTitleDiscoveryBusy}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Button.Style></Button><Button Content="Close" Style="{StaticResource CommandButton}" Command="{Binding ToggleBluRayPanelCommand}" Padding="12,6" MinHeight="0"/></StackPanel></Grid>
-     <Border Grid.Row="1" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="11" Margin="0,14,0,10"><TextBlock Text="{Binding BluRayTitleSummary}" Style="{StaticResource BodyText}" TextWrapping="Wrap"/></Border>
-     <ProgressBar Grid.Row="2" Height="3" IsIndeterminate="True" Margin="0,0,0,10"><ProgressBar.Style><Style TargetType="ProgressBar"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsBluRayTitleDiscoveryBusy}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></ProgressBar.Style></ProgressBar>
-     <ListBox x:Name="BluRayTitleList" Grid.Row="3" Style="{StaticResource MediaListBox}" Tag="No title metadata was reported. Direct disc playback remains available." ItemsSource="{Binding BluRayTitles}" SelectedItem="{Binding SelectedBluRayTitle, Mode=TwoWay}">
-      <ListBox.ItemTemplate><DataTemplate><Border x:Name="TitleCard" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,8"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="{Binding PrimaryText}" Foreground="{DynamicResource TextBrush}" FontSize="13" FontWeight="SemiBold"/><TextBlock Text="{Binding DetailText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" Margin="0,4,0,0"/></StackPanel><StackPanel Grid.Column="1" HorizontalAlignment="Right"><Border x:Name="ClassificationBadge" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="7" Padding="8,3"><TextBlock Text="{Binding ClassificationText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="9" FontWeight="Bold"/></Border><Border x:Name="PlayingBadge" Background="{DynamicResource AccentBrush}" CornerRadius="7" Padding="8,3" Margin="0,5,0,0" Visibility="Collapsed"><TextBlock Text="PLAYING" Foreground="{DynamicResource WindowBrush}" FontSize="9" FontWeight="Bold"/></Border></StackPanel></Grid><Border.Style><Style TargetType="Border"><Style.Triggers><DataTrigger Binding="{Binding IsLikelyMainFeature}" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderThickness" Value="2"/></DataTrigger><DataTrigger Binding="{Binding IsActive}" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderThickness" Value="2"/></DataTrigger></Style.Triggers></Style></Border.Style></Border><DataTemplate.Triggers><DataTrigger Binding="{Binding IsLikelyMainFeature}" Value="True"><Setter TargetName="ClassificationBadge" Property="Background" Value="{DynamicResource AccentBrush}"/><Setter TargetName="ClassificationBadge" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/></DataTrigger><DataTrigger Binding="{Binding IsActive}" Value="True"><Setter TargetName="PlayingBadge" Property="Visibility" Value="Visible"/></DataTrigger></DataTemplate.Triggers></DataTemplate></ListBox.ItemTemplate>
-     </ListBox>
-     <Button Grid.Row="4" Content="Play selected title" Style="{StaticResource CommandButton}" Command="{Binding PlayBluRayTitleCommand}" CommandParameter="{Binding SelectedBluRayTitle}" Margin="0,12,0,0"/>
-    </Grid>
-   </Border>
-   <Border Grid.Column="1" Width="520" HorizontalAlignment="Right" VerticalAlignment="Stretch" Margin="0,0,0,0" Padding="18" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1" CornerRadius="18" Panel.ZIndex="20">
-    <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsTracksPanelOpen}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
-    <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-     <Grid><TextBlock Text="TRACKS, SUBTITLES &amp; CHAPTERS" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/><Button Content="Close" HorizontalAlignment="Right" Style="{StaticResource CommandButton}" Command="{Binding ToggleTracksCommand}" Padding="12,6" MinHeight="0"/></Grid>
-     <TabControl Grid.Row="1" Margin="0,16,0,0" SelectedIndex="0">
-      <TabItem Header="Audio"><Grid Margin="8"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><ListBox Style="{StaticResource MediaListBox}" Tag="Audio tracks are still loading or were not reported by the disc." ItemsSource="{Binding AudioTracks}" SelectionChanged="AudioTracks_SelectionChanged">
-       <ListBox.ItemTemplate><DataTemplate><Border x:Name="TrackCard" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="9" Padding="12,9" Margin="0,0,0,7"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="{Binding PrimaryText}" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold"/><TextBlock Text="{Binding SecondaryText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" Margin="0,3,0,0"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding SecondaryText}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock></StackPanel><Border Grid.Column="1" x:Name="StateBadge" Background="{DynamicResource AccentBrush}" CornerRadius="7" Padding="8,3" VerticalAlignment="Center" Visibility="Collapsed"><TextBlock Text="{Binding StateText}" Foreground="{DynamicResource WindowBrush}" FontSize="9" FontWeight="Bold"/></Border></Grid><Border.Style><Style TargetType="Border"><Style.Triggers><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderThickness" Value="2"/></DataTrigger></Style.Triggers></Style></Border.Style></Border><DataTemplate.Triggers><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter TargetName="StateBadge" Property="Visibility" Value="Visible"/></DataTrigger></DataTemplate.Triggers></DataTemplate></ListBox.ItemTemplate>
-      </ListBox><TextBlock Grid.Row="1" Text="Select any audio stream while the Blu-ray continues playing. The active stream is highlighted and marked ACTIVE." Style="{StaticResource BodyText}" Margin="0,10,0,0"/></Grid></TabItem>
-      <TabItem Header="Subtitles"><Grid Margin="8"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><ListBox Style="{StaticResource MediaListBox}" Tag="No embedded subtitles were found. You can load an external subtitle file below." ItemsSource="{Binding SubtitleTracks}" SelectionChanged="SubtitleTracks_SelectionChanged">
-       <ListBox.ItemTemplate><DataTemplate><Border x:Name="TrackCard" Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="9" Padding="12,9" Margin="0,0,0,7"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="{Binding PrimaryText}" Foreground="{DynamicResource TextBrush}" FontSize="12" FontWeight="SemiBold"/><TextBlock Text="{Binding SecondaryText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" Margin="0,3,0,0"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding SecondaryText}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock></StackPanel><Border Grid.Column="1" x:Name="StateBadge" Background="{DynamicResource AccentBrush}" CornerRadius="7" Padding="8,3" VerticalAlignment="Center" Visibility="Collapsed"><TextBlock Text="{Binding StateText}" Foreground="{DynamicResource WindowBrush}" FontSize="9" FontWeight="Bold"/></Border></Grid><Border.Style><Style TargetType="Border"><Style.Triggers><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderThickness" Value="2"/></DataTrigger></Style.Triggers></Style></Border.Style></Border><DataTemplate.Triggers><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter TargetName="StateBadge" Property="Visibility" Value="Visible"/></DataTrigger></DataTemplate.Triggers></DataTemplate></ListBox.ItemTemplate>
-      </ListBox><Button Grid.Row="1" Content="Load external subtitle" Style="{StaticResource CommandButton}" Command="{Binding LoadSubtitleCommand}" Margin="0,10,0,0"/><Grid Grid.Row="2" Margin="0,10,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Subtitle delay" Style="{StaticResource BodyText}" VerticalAlignment="Center"/><Button Grid.Column="1" Content="−0.1" Style="{StaticResource CommandButton}" Command="{Binding SubtitleDelayBackCommand}" Padding="10,5" MinHeight="0"/><TextBlock Grid.Column="2" Text="{Binding SubtitleDelayText}" Foreground="{DynamicResource AccentBrush}" Margin="12,0" VerticalAlignment="Center"/><Button Grid.Column="3" Content="+0.1" Style="{StaticResource CommandButton}" Command="{Binding SubtitleDelayForwardCommand}" Padding="10,5" MinHeight="0"/></Grid></Grid></TabItem>
-      <TabItem Header="Chapters"><Grid Margin="8"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><ListBox Style="{StaticResource MediaListBox}" Tag="This media does not contain chapter markers." ItemsSource="{Binding Chapters}" SelectionChanged="Chapters_SelectionChanged">
-       <ListBox.ItemTemplate><DataTemplate><Border Background="{DynamicResource SurfaceRaisedBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="9" Padding="11,8" Margin="0,0,0,7"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="62"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding TimeText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="{Binding PrimaryText}" Foreground="{DynamicResource TextBrush}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/><Border Grid.Column="2" x:Name="NowBadge" Background="{DynamicResource AccentBrush}" CornerRadius="7" Padding="8,3" Visibility="Collapsed"><TextBlock Text="{Binding StateText}" Foreground="{DynamicResource WindowBrush}" FontSize="9" FontWeight="Bold"/></Border></Grid><Border.Style><Style TargetType="Border"><Style.Triggers><DataTrigger Binding="{Binding IsActive}" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderThickness" Value="2"/></DataTrigger></Style.Triggers></Style></Border.Style></Border><DataTemplate.Triggers><DataTrigger Binding="{Binding IsActive}" Value="True"><Setter TargetName="NowBadge" Property="Visibility" Value="Visible"/></DataTrigger></DataTemplate.Triggers></DataTemplate></ListBox.ItemTemplate>
-      </ListBox><UniformGrid Grid.Row="1" Columns="2" Margin="0,10,0,0"><Button Content="Previous chapter" Style="{StaticResource CommandButton}" Command="{Binding PreviousChapterCommand}" Margin="0,0,5,0"/><Button Content="Next chapter" Style="{StaticResource CommandButton}" Command="{Binding NextChapterCommand}" Margin="5,0,0,0"/></UniformGrid></Grid></TabItem>
-     </TabControl>
-    </Grid>
-   </Border>
-  </Grid>
-  <Border Grid.Row="2" Margin="20,0,20,18" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="17" Padding="16,13"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Grid.Column="0" Content="&#xE892;" Style="{StaticResource IconButton}" Command="{Binding SeekBackCommand}" ToolTip="Back 5 seconds"/><Button Grid.Column="1" Content="{Binding PlayPauseGlyph}" Style="{StaticResource PrimaryButton}" Command="{Binding PlayPauseCommand}" Width="76" Margin="8,0" FontFamily="Segoe Fluent Icons"/><Button Grid.Column="2" Content="&#xE893;" Style="{StaticResource IconButton}" Command="{Binding SeekForwardCommand}" ToolTip="Forward 5 seconds"/><StackPanel Grid.Column="3" Margin="18,0"><Grid><TextBlock Text="{Binding PositionText}" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/><TextBlock Text="{Binding DurationText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" HorizontalAlignment="Right"/></Grid><Slider x:Name="TimelineSlider" Minimum="0" Maximum="{Binding DurationSeconds}" Value="{Binding ScrubPosition, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" PreviewMouseLeftButtonDown="TimelineSlider_PreviewMouseLeftButtonDown" primitives:Thumb.DragStarted="TimelineSlider_DragStarted" primitives:Thumb.DragCompleted="TimelineSlider_DragCompleted" ToolTip="Click or drag to seek"/></StackPanel><StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center"><Button Content="{Binding MuteGlyph}" FontFamily="Segoe Fluent Icons" Style="{StaticResource IconButton}" Command="{Binding ToggleMuteCommand}" Width="34" Height="30" Padding="0" Margin="0,0,6,0" ToolTip="Mute / unmute"/><Slider Width="112" Minimum="0" Maximum="100" Value="{Binding Volume, Mode=TwoWay}"/><TextBlock Text="{Binding Volume, StringFormat={}{0:0}%}" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" Width="34" TextAlignment="Right"/></StackPanel></Grid><Grid Grid.Row="1" Margin="0,10,0,0"><TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11"/><TextBlock Text="SPACE Play/Pause   ← → Seek   M Mute   F Fullscreen   ESC Exit" Foreground="{DynamicResource TextMutedBrush}" FontSize="10" HorizontalAlignment="Right"/></Grid></Grid></Border>
- </Grid>
 </Window>

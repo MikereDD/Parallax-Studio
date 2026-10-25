@@ -7,6 +7,7 @@ using System.Windows.Interop;
 using System.Windows.Controls.Primitives;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using System.Windows.Media;
 using ParallaxStudio.App.Interop;
 using ParallaxStudio.App.ViewModels;
 
@@ -18,6 +19,12 @@ public partial class MainWindow : Window
     private const uint MonitorDefaultToNearest = 2;
     private WindowState _stateBeforeFullscreen = WindowState.Normal;
     private Rect _boundsBeforeFullscreen;
+    private bool _isTimelineKeyboardScrubbing;
+    private readonly DispatcherTimer _fullscreenUiTimer;
+    private FullscreenControlsWindow? _fullscreenControlsWindow;
+    private NativePoint _lastCursorPoint;
+    private DateTime _lastFullscreenActivityUtc;
+    private bool _fullscreenCursorHidden;
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".webm", ".ts", ".m2ts", ".mts", ".mpg", ".mpeg"
@@ -30,6 +37,12 @@ public partial class MainWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         _viewModel.ToggleFullscreenRequested += OnToggleFullscreenRequested;
+        _viewModel.CinemaSettingsChanged += OnCinemaSettingsChanged;
+        _fullscreenUiTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        _fullscreenUiTimer.Tick += FullscreenUiTimer_Tick;
         SourceInitialized += (_, _) =>
         {
             var hwnd = new WindowInteropHelper(this).Handle;
@@ -48,6 +61,7 @@ public partial class MainWindow : Window
 
     private void RestoreWindowGeometry()
     {
+        if (!_viewModel.RememberWindowGeometry) return;
         var settings = _viewModel.GetWindowSettings();
         Width = Math.Max(MinWidth, settings.WindowWidth);
         Height = Math.Max(MinHeight, settings.WindowHeight);
@@ -75,13 +89,26 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object? sender, CancelEventArgs e)
     {
-        var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-        _viewModel.CaptureWindowState(
-            bounds.Width,
-            bounds.Height,
-            bounds.Left,
-            bounds.Top,
-            WindowState == WindowState.Maximized);
+        _fullscreenUiTimer.Stop();
+        SetFullscreenCursorVisible(true);
+        if (_fullscreenControlsWindow is not null)
+        {
+            _fullscreenControlsWindow.Close();
+            _fullscreenControlsWindow = null;
+        }
+        _viewModel.ToggleFullscreenRequested -= OnToggleFullscreenRequested;
+        _viewModel.CinemaSettingsChanged -= OnCinemaSettingsChanged;
+
+        if (_viewModel.RememberWindowGeometry)
+        {
+            var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+            _viewModel.CaptureWindowState(
+                bounds.Width,
+                bounds.Height,
+                bounds.Left,
+                bounds.Top,
+                WindowState == WindowState.Maximized);
+        }
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -126,10 +153,20 @@ public partial class MainWindow : Window
         Width = monitorBounds.Width;
         Height = monitorBounds.Height;
         Topmost = true;
+
+        GetCursorPos(out _lastCursorPoint);
+        _lastFullscreenActivityUtc = DateTime.UtcNow;
+        SetFullscreenCursorVisible(true);
+        _fullscreenUiTimer.Start();
+        RefreshFullscreenUiState(showControls: true);
     }
 
     private void ExitFullscreen()
     {
+        _fullscreenUiTimer.Stop();
+        HideFullscreenControls();
+        SetFullscreenCursorVisible(true);
+
         // Temporarily remove the native HWND video surface while WPF restores the
         // normal grid. This prevents the fullscreen-sized child window from
         // painting over the sidebar until its host receives the new bounds.
@@ -166,6 +203,80 @@ public partial class MainWindow : Window
             VideoHost.InvalidateArrange();
             UpdateLayout();
         }));
+    }
+
+    private void OnCinemaSettingsChanged(object? sender, EventArgs e)
+    {
+        if (!_viewModel.IsFullscreen) return;
+        _lastFullscreenActivityUtc = DateTime.UtcNow;
+        SetFullscreenCursorVisible(true);
+        RefreshFullscreenUiState(showControls: true);
+    }
+
+    private void FullscreenUiTimer_Tick(object? sender, EventArgs e)
+    {
+        if (!_viewModel.IsFullscreen) return;
+
+        if (GetCursorPos(out var cursorPoint) &&
+            (cursorPoint.X != _lastCursorPoint.X || cursorPoint.Y != _lastCursorPoint.Y))
+        {
+            _lastCursorPoint = cursorPoint;
+            _lastFullscreenActivityUtc = DateTime.UtcNow;
+            SetFullscreenCursorVisible(true);
+            if (_viewModel.FullscreenHideTransport && _viewModel.FullscreenShowControlsOnMouseMove)
+                ShowFullscreenControls();
+        }
+
+        var idleFor = DateTime.UtcNow - _lastFullscreenActivityUtc;
+        if (idleFor < TimeSpan.FromSeconds(_viewModel.FullscreenControlsAutoHideSeconds)) return;
+
+        if (_viewModel.FullscreenHideTransport) HideFullscreenControls();
+        if (_viewModel.FullscreenCursorAutoHide) SetFullscreenCursorVisible(false);
+    }
+
+    private void RefreshFullscreenUiState(bool showControls)
+    {
+        if (!_viewModel.IsFullscreen) return;
+
+        if (!_viewModel.FullscreenHideTransport || !_viewModel.FullscreenShowControlsOnMouseMove)
+        {
+            HideFullscreenControls();
+            return;
+        }
+
+        if (showControls) ShowFullscreenControls();
+    }
+
+    private void ShowFullscreenControls()
+    {
+        if (!_viewModel.IsFullscreen || !_viewModel.FullscreenHideTransport) return;
+
+        _fullscreenControlsWindow ??= new FullscreenControlsWindow(_viewModel)
+        {
+            Owner = this
+        };
+
+        var width = Math.Min(960, Math.Max(620, ActualWidth - 80));
+        _fullscreenControlsWindow.Width = width;
+        _fullscreenControlsWindow.Left = Left + Math.Max(20, (ActualWidth - width) / 2);
+        _fullscreenControlsWindow.Top = Top + Math.Max(20, ActualHeight - _fullscreenControlsWindow.Height - 24);
+
+        if (!_fullscreenControlsWindow.IsVisible) _fullscreenControlsWindow.Show();
+    }
+
+    private void HideFullscreenControls()
+    {
+        if (_fullscreenControlsWindow?.IsVisible == true)
+            _fullscreenControlsWindow.Hide();
+    }
+
+    private void SetFullscreenCursorVisible(bool visible)
+    {
+        if (_fullscreenCursorHidden == !visible) return;
+        _fullscreenCursorHidden = !visible;
+        var cursor = visible ? Cursors.Arrow : Cursors.None;
+        Cursor = cursor;
+        VideoHost.Cursor = cursor;
     }
 
     private Rect GetActiveMonitorBounds()
@@ -218,12 +329,41 @@ public partial class MainWindow : Window
     private async void TimelineSlider_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not Slider slider || slider.ActualWidth <= 0) return;
-        var point = e.GetPosition(slider);
-        var target = Math.Clamp(point.X / slider.ActualWidth * slider.Maximum, slider.Minimum, slider.Maximum);
+        // Let the thumb receive the press so its existing drag events can scrub.
+        if (IsWithin<Thumb>(e.OriginalSource as DependencyObject)) return;
+        if (slider.Template.FindName("PART_Track", slider) is not Track track) return;
+        var target = Math.Clamp(track.ValueFromPoint(e.GetPosition(track)), slider.Minimum, slider.Maximum);
+        e.Handled = true;
         _viewModel.ScrubPosition = target;
         await _viewModel.CommitSeekAsync(target);
-        e.Handled = true;
     }
+
+    private void TimelineSlider_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!IsTimelineNavigationKey(e.Key)) return;
+        _isTimelineKeyboardScrubbing = true;
+        _viewModel.IsScrubbing = true;
+    }
+
+    private async void TimelineSlider_KeyUp(object sender, KeyEventArgs e)
+    {
+        if (IsTimelineNavigationKey(e.Key)) await CommitKeyboardSeekAsync();
+    }
+
+    private async void TimelineSlider_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        await CommitKeyboardSeekAsync();
+
+    private async Task CommitKeyboardSeekAsync()
+    {
+        if (!_isTimelineKeyboardScrubbing) return;
+        _isTimelineKeyboardScrubbing = false;
+        var target = _viewModel.ScrubPosition;
+        _viewModel.IsScrubbing = false;
+        await _viewModel.CommitSeekAsync(target);
+    }
+
+    private static bool IsTimelineNavigationKey(Key key) =>
+        key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End or Key.PageUp or Key.PageDown;
 
     private void TimelineSlider_DragStarted(object sender, DragStartedEventArgs e) => _viewModel.IsScrubbing = true;
 
@@ -257,6 +397,13 @@ public partial class MainWindow : Window
 
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
+        // Selectors keep their arrow keys and type-to-select letters (including F/M).
+        if (IsWithin<ComboBox>(e.OriginalSource as DependencyObject) ||
+            IsWithin<ComboBoxItem>(e.OriginalSource as DependencyObject) ||
+            IsWithin<TextBoxBase>(e.OriginalSource as DependencyObject) ||
+            IsWithin<CheckBox>(e.OriginalSource as DependencyObject) ||
+            IsWithin<Slider>(e.OriginalSource as DependencyObject)) return;
+
         switch (e.Key)
         {
             case Key.Space:
@@ -287,11 +434,21 @@ public partial class MainWindow : Window
                 _viewModel.ToggleFullscreenCommand.Execute(null);
                 e.Handled = true;
                 break;
-            case Key.Escape when _viewModel.IsFullscreen:
+            case Key.Escape when _viewModel.IsFullscreen && _viewModel.EscapeExitsFullscreen:
                 _viewModel.ToggleFullscreenCommand.Execute(null);
                 e.Handled = true;
                 break;
         }
+    }
+
+    private static bool IsWithin<T>(DependencyObject? source) where T : DependencyObject
+    {
+        while (source is not null)
+        {
+            if (source is T) return true;
+            source = source is Visual ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source);
+        }
+        return false;
     }
     private const int WmGetMinMaxInfo = 0x0024;
 
@@ -354,6 +511,10 @@ public partial class MainWindow : Window
         public NativeRect WorkArea;
         public uint Flags;
     }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out NativePoint point);
 
     [DllImport("user32.dll")]
     private static extern nint MonitorFromWindow(nint windowHandle, uint flags);
