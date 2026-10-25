@@ -199,7 +199,81 @@
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
-                        <interop:VideoSurfaceHost x:Name="VideoHost" HandleCreated="VideoHost_HandleCreated" />
+                        <Grid>
+                            <interop:VideoSurfaceHost x:Name="VideoHost"
+                                                      HandleCreated="VideoHost_HandleCreated"
+                                                      DoubleClicked="VideoHost_DoubleClicked" />
+
+                            <Border Visibility="{Binding EmptyStateVisibility}"
+                                    Background="{DynamicResource SurfaceGradientBrush}"
+                                    Padding="34"
+                                    ClipToBounds="True">
+                                <Grid>
+                                    <Ellipse Width="520" Height="520"
+                                             Stroke="{DynamicResource AccentBrush}"
+                                             StrokeThickness="1"
+                                             Opacity="0.055"
+                                             HorizontalAlignment="Center"
+                                             VerticalAlignment="Center" />
+                                    <Ellipse Width="360" Height="360"
+                                             Stroke="{DynamicResource AccentSecondaryBrush}"
+                                             StrokeThickness="1"
+                                             Opacity="0.075"
+                                             HorizontalAlignment="Center"
+                                             VerticalAlignment="Center" />
+                                    <StackPanel HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                Width="440">
+                                        <Border Width="88" Height="88"
+                                                Style="{StaticResource InsetBorder}"
+                                                Padding="16"
+                                                HorizontalAlignment="Center">
+                                            <Image Source="Assets/parallax-studio-icon-256.png"
+                                                   Stretch="Uniform"
+                                                   RenderOptions.BitmapScalingMode="HighQuality" />
+                                        </Border>
+                                        <TextBlock Text="PARALLAX / READY"
+                                                   Style="{StaticResource EyebrowText}"
+                                                   HorizontalAlignment="Center"
+                                                   Margin="0,24,0,0" />
+                                        <TextBlock Text="Your screening room is ready."
+                                                   Style="{StaticResource HeadlineText}"
+                                                   FontSize="25"
+                                                   TextAlignment="Center"
+                                                   HorizontalAlignment="Center"
+                                                   Margin="0,9,0,0" />
+                                        <TextBlock Text="Open a movie, drop a file anywhere in the window, or insert a Blu-ray or DVD."
+                                                   Style="{StaticResource BodyText}"
+                                                   FontSize="12"
+                                                   TextAlignment="Center"
+                                                   TextWrapping="Wrap"
+                                                   HorizontalAlignment="Center"
+                                                   Margin="0,10,0,0" />
+                                        <StackPanel Orientation="Horizontal"
+                                                    HorizontalAlignment="Center"
+                                                    Margin="0,24,0,0">
+                                            <Button Content="Open video"
+                                                    Style="{StaticResource PrimaryButton}"
+                                                    Command="{Binding OpenCommand}"
+                                                    MinWidth="132"
+                                                    Margin="0,0,10,0"
+                                                    AutomationProperties.Name="Open video" />
+                                            <Button Content="Scan discs"
+                                                    Style="{StaticResource CommandButton}"
+                                                    Command="{Binding ScanDiscsCommand}"
+                                                    MinWidth="118"
+                                                    AutomationProperties.Name="Scan optical discs" />
+                                        </StackPanel>
+                                        <TextBlock Text="SPACE  Play / pause   •   F  Fullscreen   •   ← →  Seek"
+                                                   Foreground="{DynamicResource TextMutedBrush}"
+                                                   FontSize="10"
+                                                   TextAlignment="Center"
+                                                   HorizontalAlignment="Center"
+                                                   Margin="0,22,0,0" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </Grid>
                     </Border>
                     <Border Grid.Row="2" Style="{StaticResource CinemaChrome}" Padding="18,12">
                         <Grid>
@@ -265,7 +339,12 @@
                             <Border Style="{StaticResource InsetBorder}" Padding="12" Margin="0,18,0,0">
                                 <StackPanel>
                                     <TextBlock Text="MEDIA DETAILS" Style="{StaticResource SectionLabel}" />
-                                    <TextBlock Text="{Binding MediaDetailsText}" Style="{StaticResource BodyText}" FontSize="11" Margin="0,6,0,0" />
+                                    <TextBlock Text="{Binding MediaDetailsText}"
+                                               Style="{StaticResource BodyText}"
+                                               FontSize="11"
+                                               LineHeight="18"
+                                               TextWrapping="Wrap"
+                                               Margin="0,8,0,0" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>
@@ -655,8 +734,8 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel>
                             <TextBlock Text="PARALLAX / SETTINGS" Style="{StaticResource EyebrowText}" />
-                            <TextBlock Text="Cinema behavior" Style="{StaticResource HeadlineText}" Margin="0,6,0,0" />
-                            <TextBlock Text="Tune how Parallax gets out of the way when the movie starts." Style="{StaticResource BodyText}" FontSize="11" Margin="0,8,20,0" />
+                            <TextBlock Text="Player experience" Style="{StaticResource HeadlineText}" Margin="0,6,0,0" />
+                            <TextBlock Text="Shape playback, resume behavior, and how Parallax gets out of the way when the movie starts." Style="{StaticResource BodyText}" FontSize="11" Margin="0,8,20,0" />
                         </StackPanel>
                         <Button Grid.Column="1" Content="" Style="{StaticResource IconButton}" Command="{Binding ToggleSettingsCommand}" ToolTip="Close settings" AutomationProperties.Name="Close settings" VerticalAlignment="Top" />
                     </Grid>
@@ -679,6 +758,32 @@
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel Margin="0,0,16,0"><TextBlock Text="Restore sidebar when playback stops" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Return to the full Studio layout after a movie or title stops." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
                                     <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding RestoreSidebarWhenPlaybackStops, Mode=TwoWay}" AutomationProperties.Name="Restore sidebar when playback stops"/>
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Text="PLAYBACK" Style="{StaticResource EyebrowText}" Margin="0,12,0,9" />
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Resume playback" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Continue local files from the last meaningful position; near-finished titles start fresh." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding ResumePlayback, Mode=TwoWay}" AutomationProperties.Name="Resume playback"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Seek interval" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Set the jump used by the transport buttons and left/right arrow keys." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><ComboBox Width="78" ItemsSource="{Binding SeekStepOptions}" SelectedItem="{Binding SeekStepSeconds, Mode=TwoWay}" AutomationProperties.Name="Seek interval seconds"/><TextBlock Text="s" Foreground="{DynamicResource TextMutedBrush}" Margin="7,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Remember volume" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Restore the last volume on the next launch." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding RememberVolume, Mode=TwoWay}" AutomationProperties.Name="Remember volume"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Double-click for fullscreen" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Double-click the native video surface to enter or leave fullscreen." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding DoubleClickFullscreen, Mode=TwoWay}" AutomationProperties.Name="Double-click video for fullscreen"/>
                                 </Grid>
                             </Border>
 
@@ -752,9 +857,9 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekBackCommand}" ToolTip="Back 5 seconds (←)" AutomationProperties.Name="Back 5 seconds" />
+                        <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekBackCommand}" ToolTip="{Binding SeekBackToolTip}" AutomationProperties.Name="{Binding SeekBackToolTip}" />
                         <Button Content="{Binding PlayPauseGlyph}" Style="{StaticResource PrimaryButton}" Command="{Binding PlayPauseCommand}" Width="62" Height="48" Margin="8,0" FontFamily="Segoe Fluent Icons" FontSize="19" Padding="0" ToolTip="Play or pause (Space)" AutomationProperties.Name="{Binding PlayPauseText}" />
-                        <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekForwardCommand}" ToolTip="Forward 5 seconds (→)" AutomationProperties.Name="Forward 5 seconds" />
+                        <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekForwardCommand}" ToolTip="{Binding SeekForwardToolTip}" AutomationProperties.Name="{Binding SeekForwardToolTip}" />
                         <Button Content="" Style="{StaticResource IconButton}" Command="{Binding StopCommand}" ToolTip="Stop playback" AutomationProperties.Name="Stop playback" Margin="8,0,0,0" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Margin="24,0" VerticalAlignment="Center">

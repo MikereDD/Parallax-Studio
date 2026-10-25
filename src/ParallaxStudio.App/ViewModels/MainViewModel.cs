@@ -41,7 +41,7 @@ public sealed class MainViewModel : ObservableObject
     private string _selectedTheme = "Dark Monochrome";
     private string _selectedTypography = "Cadence";
     private double _subtitleDelay;
-    private string _mediaDetailsText = "No media metadata loaded";
+    private string _mediaDetailsText = "Open a video or play a disc to see codec, format, audio, subtitle, and chapter details.";
     private bool _isBluRayPanelOpen;
     private DiscSource? _activeDisc;
     private bool _isRefreshingMediaNavigation;
@@ -61,6 +61,9 @@ public sealed class MainViewModel : ObservableObject
     private bool _isCinemaSidebarHidden;
     private PlaybackState _currentPlaybackState = PlaybackState.Stopped;
     private bool? _sidebarHiddenOverride;
+    private string? _activeResumePath;
+    private DateTimeOffset _lastResumePersistUtc = DateTimeOffset.MinValue;
+    private bool _hasActiveMedia;
 
     public MainViewModel(
         IPlaybackService playback,
@@ -92,8 +95,8 @@ public sealed class MainViewModel : ObservableObject
         ToggleBluRayPanelCommand = new RelayCommand(ToggleBluRayPanel);
         PlayPauseCommand = new AsyncRelayCommand(PlayPauseAsync);
         StopCommand = new AsyncRelayCommand(StopAsync);
-        SeekBackCommand = new AsyncRelayCommand(() => SeekAsync(-5));
-        SeekForwardCommand = new AsyncRelayCommand(() => SeekAsync(5));
+        SeekBackCommand = new AsyncRelayCommand(() => SeekAsync(-SeekStepSeconds));
+        SeekForwardCommand = new AsyncRelayCommand(() => SeekAsync(SeekStepSeconds));
         ToggleTracksCommand = new AsyncRelayCommand(ToggleTracksAsync);
         ToggleFullscreenCommand = new RelayCommand(ToggleFullscreen);
         ToggleSettingsCommand = new RelayCommand(ToggleSettingsPanel);
@@ -108,6 +111,7 @@ public sealed class MainViewModel : ObservableObject
 
     public event EventHandler? ToggleFullscreenRequested;
     public event EventHandler? CinemaSettingsChanged;
+    public event EventHandler? MediaPresentationChanged;
 
     public string AppTitle => $"{AppIdentity.Name}  v{AppIdentity.Version}";
     public string VersionLabel => $"v{AppIdentity.Version}";
@@ -139,6 +143,9 @@ public sealed class MainViewModel : ObservableObject
     public IReadOnlyList<string> ThemeNames => StudioAppearanceService.Themes;
     public IReadOnlyList<string> TypographyNames => StudioAppearanceService.TypographyProfiles;
     public IReadOnlyList<int> FullscreenControlTimeoutOptions { get; } = [2, 3, 4, 5, 8];
+    public IReadOnlyList<int> SeekStepOptions { get; } = [5, 10, 15, 30];
+    public string SeekBackToolTip => $"Back {SeekStepSeconds} seconds (←)";
+    public string SeekForwardToolTip => $"Forward {SeekStepSeconds} seconds (→)";
 
     public ICommand OpenCommand { get; }
     public ICommand ScanDiscsCommand { get; }
@@ -204,7 +211,19 @@ public sealed class MainViewModel : ObservableObject
 
     public string PlayPauseGlyph => PlayPauseText == "Pause" ? "\uE769" : "\uE768";
     public string MuteGlyph => IsMuted ? "\uE74F" : "\uE767";
-    public Visibility EmptyStateVisibility => NowPlayingTitle == "Nothing playing" ? Visibility.Visible : Visibility.Collapsed;
+
+    public bool HasActiveMedia
+    {
+        get => _hasActiveMedia;
+        private set
+        {
+            if (!SetProperty(ref _hasActiveMedia, value)) return;
+            OnPropertyChanged(nameof(EmptyStateVisibility));
+            MediaPresentationChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public Visibility EmptyStateVisibility => HasActiveMedia ? Visibility.Collapsed : Visibility.Visible;
 
     public double PositionSeconds
     {
@@ -289,7 +308,8 @@ public sealed class MainViewModel : ObservableObject
         {
             var clamped = Math.Clamp(value, 0, 100);
             if (!SetProperty(ref _volume, clamped)) return;
-            _settings.Volume = clamped;
+            if (_settings.RememberVolume)
+                _settings.Volume = clamped;
             _ = ApplyVolumeAsync(clamped);
         }
     }
@@ -392,6 +412,46 @@ public sealed class MainViewModel : ObservableObject
         set => UpdateCinemaSetting(_settings.ReduceMotion, value, v => _settings.ReduceMotion = v, nameof(ReduceMotion));
     }
 
+    public bool ResumePlayback
+    {
+        get => _settings.ResumePlayback;
+        set => UpdatePlaybackSetting(_settings.ResumePlayback, value, v => _settings.ResumePlayback = v, nameof(ResumePlayback));
+    }
+
+    public int SeekStepSeconds
+    {
+        get => _settings.SeekStepSeconds;
+        set
+        {
+            var normalized = SeekStepOptions.Contains(value) ? value : 10;
+            if (_settings.SeekStepSeconds == normalized) return;
+            _settings.SeekStepSeconds = normalized;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SeekBackToolTip));
+            OnPropertyChanged(nameof(SeekForwardToolTip));
+            QueueSettingsSave();
+        }
+    }
+
+    public bool RememberVolume
+    {
+        get => _settings.RememberVolume;
+        set
+        {
+            if (_settings.RememberVolume == value) return;
+            _settings.RememberVolume = value;
+            if (value) _settings.Volume = Volume;
+            OnPropertyChanged();
+            QueueSettingsSave();
+        }
+    }
+
+    public bool DoubleClickFullscreen
+    {
+        get => _settings.DoubleClickFullscreen;
+        set => UpdatePlaybackSetting(_settings.DoubleClickFullscreen, value, v => _settings.DoubleClickFullscreen = v, nameof(DoubleClickFullscreen));
+    }
+
     public async Task InitializeViewAsync()
     {
         if (_initialized) return;
@@ -399,7 +459,7 @@ public sealed class MainViewModel : ObservableObject
 
         var loaded = await _settingsService.LoadAsync();
         CopySettings(loaded, _settings);
-        _volume = _settings.Volume;
+        _volume = _settings.RememberVolume ? _settings.Volume : 68;
         _selectedTheme = _settings.ThemeName;
         _selectedTypography = _settings.TypographyProfile;
         StudioAppearanceService.ApplyTheme(_selectedTheme);
@@ -417,6 +477,12 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(EscapeExitsFullscreen));
         OnPropertyChanged(nameof(RememberWindowGeometry));
         OnPropertyChanged(nameof(ReduceMotion));
+        OnPropertyChanged(nameof(ResumePlayback));
+        OnPropertyChanged(nameof(SeekStepSeconds));
+        OnPropertyChanged(nameof(SeekBackToolTip));
+        OnPropertyChanged(nameof(SeekForwardToolTip));
+        OnPropertyChanged(nameof(RememberVolume));
+        OnPropertyChanged(nameof(DoubleClickFullscreen));
         UpdateCinemaSidebarState();
 
         StatusText = "Player shell ready. Waiting for the native video surface.";
@@ -485,7 +551,9 @@ public sealed class MainViewModel : ObservableObject
             }
         }
 
-        _settings.Volume = Volume;
+        await PersistResumeCheckpointAsync(force: true).ConfigureAwait(false);
+        if (_settings.RememberVolume)
+            _settings.Volume = Volume;
         await PersistSettingsAsync().ConfigureAwait(false);
         await _playback.DisposeAsync().ConfigureAwait(false);
         _bluRayDiscoveryCancellation?.Dispose();
@@ -503,12 +571,18 @@ public sealed class MainViewModel : ObservableObject
     {
         try
         {
+            _activeDisc = null;
             _settings.LastOpenDirectory = Path.GetDirectoryName(path);
+            _activeResumePath = Path.GetFullPath(path);
+            _lastResumePersistUtc = DateTimeOffset.MinValue;
             StatusText = $"Opening {Path.GetFileName(path)}...";
             await _playback.OpenFileAsync(path);
             StatusText = "Playback active. Reading tracks, subtitles, and chapters...";
             await RefreshMediaNavigationWithRetryAsync(10, 300);
-            StatusText = "Playback active. Tracks, subtitles, and chapters are ready.";
+            var resumedAt = await TryResumeFileAsync(_activeResumePath);
+            StatusText = resumedAt is double seconds
+                ? $"Playback resumed at {FormatTime(TimeSpan.FromSeconds(seconds))}. Tracks, subtitles, and chapters are ready."
+                : "Playback active. Tracks, subtitles, and chapters are ready.";
         }
         catch (Exception ex)
         {
@@ -630,20 +704,13 @@ public sealed class MainViewModel : ObservableObject
             _isRefreshingMediaNavigation = false;
         }
 
-        var video = tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Video);
-        MediaDetailsText = string.Join(" • ", new[]
-        {
-            video?.Codec,
-            $"{AudioTracks.Count} audio",
-            $"{Math.Max(0, SubtitleTracks.Count - 1)} subtitles",
-            $"{Chapters.Count} chapters"
-        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        MediaDetailsText = BuildMediaDetails(tracks, chapters, _playback.Snapshot);
 
         await _logger.InfoAsync($"Media navigation refreshed: {AudioTracks.Count} audio, {Math.Max(0, SubtitleTracks.Count - 1)} subtitles, {Chapters.Count} chapters.");
         return tracks.Count > 0 || chapters.Count > 0;
     }
 
-    private async Task<bool> RefreshMediaNavigationWithRetryAsync(int attempts = 16, int delayMilliseconds = 500)
+    private async Task<bool> RefreshMediaNavigationWithRetryAsync(int attempts = 120, int delayMilliseconds = 500)
     {
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
@@ -718,6 +785,7 @@ public sealed class MainViewModel : ObservableObject
         {
             CancelBluRayTitleDiscovery();
             _activeDisc = disc;
+            _activeResumePath = null;
             StatusText = $"Opening {disc.KindLabel} from {disc.DriveRoot}...";
             IsTracksPanelOpen = false;
             IsBluRayPanelOpen = false;
@@ -751,7 +819,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 StatusText = navigationReady
                     ? $"{disc.KindLabel} playback active. Audio, subtitles, and chapters are ready in Tracks."
-                    : $"{disc.KindLabel} playback active. Track metadata is still loading; open Tracks to refresh.";
+                    : $"{disc.KindLabel} playback active. Media details are still loading. Open Tracks & chapters to refresh if they do not appear.";
             }
         }
         catch (Exception ex)
@@ -866,6 +934,7 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             SelectedBluRayTitle = title;
+            _activeResumePath = null;
             if (_activeDisc.Kind == DiscKind.Dvd)
             {
                 _lastDvdReconciliationUiSource = string.Empty;
@@ -1078,7 +1147,11 @@ public sealed class MainViewModel : ObservableObject
         cancellation.Cancel();
     }
 
-    private Task ScanDiscsAsync() => ScanDiscsCoreAsync(isAutomatic: false, CancellationToken.None);
+    private async Task ScanDiscsAsync()
+    {
+        StatusText = "Scanning optical drives...";
+        await ScanDiscsCoreAsync(isAutomatic: false, CancellationToken.None);
+    }
 
     private async Task WatchOpticalDiscsAsync(CancellationToken cancellationToken)
     {
@@ -1178,10 +1251,12 @@ public sealed class MainViewModel : ObservableObject
         if (!isAutomatic)
         {
             StatusText = discs.Count == 0
-                ? "No optical drives detected. File playback remains available."
+                ? "Scan complete. No optical drives detected. File playback remains available."
                 : readyDiscs.Length == 0
-                    ? $"Found {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}. No disc is currently ready."
-                    : $"Found {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}. Insert a Blu-ray or DVD and choose Play or Browse titles.";
+                    ? $"Scan complete. Found {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}, but no disc is currently ready."
+                    : readyDiscs.Length == 1
+                        ? $"Scan complete. {CleanDiscDisplayName(readyDiscs[0])} — {readyDiscs[0].KindLabel} on {Path.GetPathRoot(readyDiscs[0].DriveRoot) ?? readyDiscs[0].DriveRoot}. Ready to play or browse titles."
+                        : $"Scan complete. {readyDiscs.Length} discs are ready across {discs.Count} optical drive{(discs.Count == 1 ? string.Empty : "s")}.";
         }
     }
 
@@ -1219,6 +1294,7 @@ public sealed class MainViewModel : ObservableObject
     {
         try
         {
+            await PersistResumeCheckpointAsync(force: true);
             await _playback.StopAsync();
             StatusText = "Playback stopped.";
         }
@@ -1323,6 +1399,14 @@ public sealed class MainViewModel : ObservableObject
         QueueSettingsSave();
     }
 
+    private void UpdatePlaybackSetting(bool current, bool value, Action<bool> assign, string propertyName)
+    {
+        if (current == value) return;
+        assign(value);
+        OnPropertyChanged(propertyName);
+        QueueSettingsSave();
+    }
+
     private void QueueSettingsSave() => _ = PersistSettingsAsync();
 
     private async Task PersistSettingsAsync()
@@ -1347,8 +1431,11 @@ public sealed class MainViewModel : ObservableObject
         void Apply()
         {
             var snapshot = e.Snapshot;
-            NowPlayingTitle = snapshot.Title;
-            SourceText = snapshot.Source ?? "Open a video to begin";
+            HasActiveMedia = snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused;
+            NowPlayingTitle = HasActiveMedia ? snapshot.Title : "Nothing playing";
+            SourceText = HasActiveMedia ? snapshot.Source ?? "Media source" : "Open a video to begin";
+            if (!HasActiveMedia)
+                MediaDetailsText = "Open a video or play a disc to see codec, format, audio, subtitle, and chapter details.";
             PositionText = FormatTime(snapshot.Position);
             DurationText = FormatTime(snapshot.Duration);
             PositionSeconds = snapshot.Position.TotalSeconds;
@@ -1369,6 +1456,20 @@ public sealed class MainViewModel : ObservableObject
                 _sidebarHiddenOverride = null;
             }
             UpdateCinemaSidebarState();
+
+            if (_activeResumePath is not null &&
+                snapshot.State is PlaybackState.Playing or PlaybackState.Paused)
+            {
+                _ = PersistResumeCheckpointAsync(force: snapshot.State == PlaybackState.Paused);
+            }
+            else if (_activeResumePath is not null &&
+                     _settings.ResumePlayback &&
+                     snapshot.State == PlaybackState.Stopped &&
+                     snapshot.Duration > TimeSpan.Zero &&
+                     snapshot.Position >= snapshot.Duration - TimeSpan.FromSeconds(_settings.ResumeCompletionThresholdSeconds))
+            {
+                _ = _resumeStore.RemoveAsync(_activeResumePath);
+            }
 
             // DVD reconciliation happens on the isolated playback polling thread just
             // before the reconciled snapshot is published. Use that state event as the
@@ -1434,12 +1535,127 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private async Task<double?> TryResumeFileAsync(string path)
+    {
+        if (!_settings.ResumePlayback) return null;
+
+        var entry = await _resumeStore.GetAsync(path).ConfigureAwait(false);
+        if (entry is null || entry.PositionSeconds < _settings.ResumeMinimumSeconds)
+            return null;
+
+        var runtimeDuration = _playback.Snapshot.Duration.TotalSeconds;
+        var duration = runtimeDuration > 0 ? runtimeDuration : entry.DurationSeconds;
+        if (duration > 0 &&
+            duration - entry.PositionSeconds <= _settings.ResumeCompletionThresholdSeconds)
+        {
+            await _resumeStore.RemoveAsync(path).ConfigureAwait(false);
+            return null;
+        }
+
+        await _playback.SeekAbsoluteAsync(entry.PositionSeconds).ConfigureAwait(false);
+        return entry.PositionSeconds;
+    }
+
+    private async Task PersistResumeCheckpointAsync(bool force = false)
+    {
+        var path = _activeResumePath;
+        if (!_settings.ResumePlayback || string.IsNullOrWhiteSpace(path)) return;
+
+        var snapshot = _playback.Snapshot;
+        var position = snapshot.Position.TotalSeconds;
+        var duration = snapshot.Duration.TotalSeconds;
+        if (duration <= 0 || position < _settings.ResumeMinimumSeconds) return;
+
+        if (duration - position <= _settings.ResumeCompletionThresholdSeconds)
+        {
+            await _resumeStore.RemoveAsync(path).ConfigureAwait(false);
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (!force && now - _lastResumePersistUtc < TimeSpan.FromSeconds(10)) return;
+        _lastResumePersistUtc = now;
+
+        await _resumeStore.UpsertAsync(
+            new ResumeEntry(path, position, duration, now)).ConfigureAwait(false);
+    }
+
+    private string BuildMediaDetails(
+        IReadOnlyList<MediaTrack> tracks,
+        IReadOnlyList<MediaChapter> chapters,
+        PlaybackSnapshot snapshot)
+    {
+        var lines = new List<string>();
+
+        var video = tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Video && track.IsSelected)
+            ?? tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Video);
+        if (video is not null)
+        {
+            var videoParts = new[]
+            {
+                FormatVideoCodec(video.Codec),
+                video.Details
+            }.Where(value => !string.IsNullOrWhiteSpace(value));
+            lines.Add($"VIDEO   {string.Join(" • ", videoParts)}");
+        }
+
+        var audio = tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Audio && track.IsSelected)
+            ?? tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Audio);
+        if (audio is not null)
+        {
+            var audioText = string.IsNullOrWhiteSpace(audio.SecondaryText)
+                ? audio.PrimaryText
+                : $"{audio.PrimaryText} • {audio.SecondaryText}";
+            lines.Add($"AUDIO   {audioText}");
+        }
+
+        var subtitle = tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Subtitle && track.IsSelected);
+        lines.Add(subtitle is null
+            ? "SUBS    Off"
+            : $"SUBS    {subtitle.PrimaryText}");
+
+        var sourceKind = _activeDisc?.Kind switch
+        {
+            DiscKind.BluRay => "Blu-ray",
+            DiscKind.Dvd => "DVD",
+            _ when snapshot.Source?.StartsWith("Blu-ray", StringComparison.OrdinalIgnoreCase) == true => "Blu-ray",
+            _ when snapshot.Source?.StartsWith("DVD", StringComparison.OrdinalIgnoreCase) == true => "DVD",
+            _ => "File"
+        };
+
+        var sourceParts = new List<string> { sourceKind };
+        if (snapshot.Duration > TimeSpan.Zero)
+            sourceParts.Add(FormatTime(snapshot.Duration));
+        if (chapters.Count > 0)
+            sourceParts.Add($"{chapters.Count} chapter{(chapters.Count == 1 ? string.Empty : "s")}");
+        lines.Add($"SOURCE  {string.Join(" • ", sourceParts)}");
+
+        return lines.Count == 0
+            ? "Media metadata is still loading."
+            : string.Join(Environment.NewLine, lines);
+    }
+
+    private static string? FormatVideoCodec(string? codec)
+    {
+        if (string.IsNullOrWhiteSpace(codec)) return null;
+        return codec.Trim().ToLowerInvariant() switch
+        {
+            "hevc" or "h265" or "hev1" or "hvc1" => "HEVC",
+            "h264" or "avc1" => "H.264",
+            "av1" => "AV1",
+            "vp9" => "VP9",
+            "mpeg2video" => "MPEG-2",
+            "vc1" => "VC-1",
+            _ => codec.Trim().ToUpperInvariant()
+        };
+    }
+
     private static string FormatTime(TimeSpan value) =>
         value.TotalHours >= 1 ? value.ToString(@"h\:mm\:ss") : value.ToString(@"mm\:ss");
 
     private static void CopySettings(AppSettings source, AppSettings destination)
     {
-        destination.SchemaVersion = Math.Max(3, source.SchemaVersion);
+        destination.SchemaVersion = Math.Max(4, source.SchemaVersion);
         destination.Volume = Math.Clamp(source.Volume, 0, 100);
         destination.LastOpenDirectory = source.LastOpenDirectory;
         destination.WindowWidth = source.WindowWidth;
@@ -1454,6 +1670,12 @@ public sealed class MainViewModel : ObservableObject
         destination.CinemaAutoExpand = source.CinemaAutoExpand;
         destination.RestoreSidebarWhenPlaybackStops = source.RestoreSidebarWhenPlaybackStops;
         destination.ShowSidebarWhenPaused = source.ShowSidebarWhenPaused;
+        destination.ResumePlayback = source.ResumePlayback;
+        destination.ResumeMinimumSeconds = Math.Clamp(source.ResumeMinimumSeconds, 5, 300);
+        destination.ResumeCompletionThresholdSeconds = Math.Clamp(source.ResumeCompletionThresholdSeconds, 15, 600);
+        destination.SeekStepSeconds = source.SeekStepSeconds is 5 or 10 or 15 or 30 ? source.SeekStepSeconds : 10;
+        destination.RememberVolume = source.RememberVolume;
+        destination.DoubleClickFullscreen = source.DoubleClickFullscreen;
         destination.FullscreenHideTransport = source.FullscreenHideTransport;
         destination.FullscreenShowControlsOnMouseMove = source.FullscreenShowControlsOnMouseMove;
         destination.FullscreenControlsAutoHideSeconds = Math.Clamp(source.FullscreenControlsAutoHideSeconds, 1, 15);

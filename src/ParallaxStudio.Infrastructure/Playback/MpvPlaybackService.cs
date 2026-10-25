@@ -1170,6 +1170,13 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         await WithInitializedContextAsync(context =>
         {
             var count = ParseInt(_library.GetProperty(context, "track-list/count"));
+            var videoWidth = ParseInt(_library.GetProperty(context, "video-params/w"));
+            var videoHeight = ParseInt(_library.GetProperty(context, "video-params/h"));
+            var videoFps = ParseDouble(FirstNonEmpty(
+                _library.GetProperty(context, "container-fps"),
+                _library.GetProperty(context, "estimated-vf-fps")));
+            var videoGamma = _library.GetProperty(context, "video-params/gamma");
+            var videoDetails = BuildVideoDetails(videoWidth, videoHeight, videoFps, videoGamma);
             var activeAudioId = ParseInt(_library.GetProperty(context, "aid"), -1);
             var activeSubtitleId = ParseInt(_library.GetProperty(context, "sid"), -1);
             var activeVideoId = ParseInt(_library.GetProperty(context, "vid"), -1);
@@ -1192,9 +1199,19 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 var codec = _library.GetProperty(context, prefix + "codec");
                 var channels = _library.GetProperty(context, prefix + "demux-channel-count");
                 var channelLayout = _library.GetProperty(context, prefix + "demux-channels");
-                var details = kind == MediaTrackKind.Audio
-                    ? FirstNonEmpty(channelLayout, !string.IsNullOrWhiteSpace(channels) ? $"{channels} ch" : null)
-                    : null;
+                var sampleRate = ParseInt(_library.GetProperty(context, prefix + "demux-samplerate"));
+                var audioLayout = FirstNonEmpty(channelLayout, !string.IsNullOrWhiteSpace(channels) ? $"{channels} ch" : null);
+                var audioDetails = string.Join(" • ", new[]
+                {
+                    audioLayout,
+                    sampleRate > 0 ? $"{sampleRate / 1000d:0.#} kHz" : null
+                }.Where(value => !string.IsNullOrWhiteSpace(value)));
+                var details = kind switch
+                {
+                    MediaTrackKind.Audio => string.IsNullOrWhiteSpace(audioDetails) ? null : audioDetails,
+                    MediaTrackKind.Video => videoDetails,
+                    _ => null
+                };
                 var label = string.IsNullOrWhiteSpace(title)
                     ? $"{kind} {id}"
                     : title;
@@ -1630,6 +1647,30 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 
     private static int ParseInt(string? value, int fallback = 0) =>
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) ? result : fallback;
+
+    private static double ParseDouble(string? value, double fallback = 0) =>
+        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) && double.IsFinite(result)
+            ? result
+            : fallback;
+
+    private static string? BuildVideoDetails(int width, int height, double fps, string? gamma)
+    {
+        var parts = new List<string>();
+        if (width > 0 && height > 0)
+            parts.Add($"{width}×{height}");
+        if (fps > 0)
+            parts.Add($"{fps:0.###} fps");
+
+        if (!string.IsNullOrWhiteSpace(gamma))
+        {
+            if (gamma.Contains("pq", StringComparison.OrdinalIgnoreCase))
+                parts.Add("HDR (PQ)");
+            else if (gamma.Contains("hlg", StringComparison.OrdinalIgnoreCase))
+                parts.Add("HDR (HLG)");
+        }
+
+        return parts.Count == 0 ? null : string.Join(" • ", parts);
+    }
 
     private static bool IsYes(string? value) =>
         string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase) || value == "1" ||
