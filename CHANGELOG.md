@@ -1,5 +1,7 @@
 ## Unreleased
 
+- DVD title mapping now accepts a match only when it is unique in both directions within a 15 s runtime window; near-equal or competing titles are refused with an explicit ambiguity reason instead of being assigned by closest delta or index order
+- post-load DVD reconciliation no longer overwrites a mapping: ambiguous evidence keeps it unverified, and conflicting evidence withdraws both claims
 - fixes DVD host teardown throwing `ObjectDisposedException` on every title switch or source change after DVD playback
 - bounds every DVD host IPC request, the per-session I/O gate wait, graceful shutdown, exit wait, and termination; a hung host is now reported as faulted and terminated instead of hanging playback controls and application exit
 - adds DVD host session ids and service routing generations so a superseded host's teardown or failure can no longer disown or fault its replacement

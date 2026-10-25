@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Pipes;
 using ParallaxStudio.Core.Enums;
 using ParallaxStudio.Core.Models;
@@ -15,6 +16,8 @@ namespace ParallaxStudio.DvdHostStub;
 ///   ignore-shutdown   acknowledge "shutdown" but never exit
 ///   die-after         exit with code 3 PARALLAX_DVD_STUB_DELAY_MS after connecting
 ///   slow-connect      wait PARALLAX_DVD_STUB_DELAY_MS before opening the pipe
+/// PARALLAX_DVD_STUB_DURATION / PARALLAX_DVD_STUB_CHAPTERS set the loaded title's runtime
+/// and chapter count; "STUB_TITLE {pid} {--title}" records the requested DVD selector.
 ///   stall-snapshot    answer normally for PARALLAX_DVD_STUB_DELAY_MS after connecting, then
 ///                     print "STUB_STALL {pid}" and never answer the next "snapshot"
 /// The first stdout line is "STUB_PID {pid} MODE {mode}" so tests can track processes.
@@ -47,8 +50,14 @@ internal static class Program
             _ = Task.Delay(delay).ContinueWith(_ => Environment.Exit(3));
 
         var connectedAt = Stopwatch.StartNew();
+        // The loaded program's runtime and chapter count, as libmpv would report them.
+        var duration = TimeSpan.TryParse(Environment.GetEnvironmentVariable("PARALLAX_DVD_STUB_DURATION"), CultureInfo.InvariantCulture, out var configured)
+            ? configured
+            : TimeSpan.FromMinutes(44);
+        var chapterCount = int.TryParse(Environment.GetEnvironmentVariable("PARALLAX_DVD_STUB_CHAPTERS"), out var chapters) ? chapters : 0;
+        Console.WriteLine($"STUB_TITLE {Environment.ProcessId} {options.GetValueOrDefault("title")}");
         var snapshot = new PlaybackSnapshot(
-            PlaybackState.Playing, null, "Stub DVD", TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(44), 68, false);
+            PlaybackState.Playing, null, "Stub DVD", TimeSpan.FromSeconds(1), duration, 68, false);
 
         async Task<DvdHostResponse> HandleAsync(DvdHostRequest request, CancellationToken cancellationToken)
         {
@@ -72,7 +81,9 @@ internal static class Program
                 case "tracks":
                     return new DvdHostResponse(true, Tracks: []);
                 case "chapters":
-                    return new DvdHostResponse(true, Chapters: []);
+                    return new DvdHostResponse(true, Chapters: Enumerable.Range(0, chapterCount)
+                        .Select(index => new MediaChapter(index, $"Chapter {index + 1}", TimeSpan.FromMinutes(5 * index)))
+                        .ToArray());
                 case "editions":
                     return new DvdHostResponse(true, Editions: []);
                 case "toggle-pause":

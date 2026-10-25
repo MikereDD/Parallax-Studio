@@ -13,7 +13,7 @@ namespace ParallaxStudio.Infrastructure.Tests;
 /// that speaks the real IPC protocol, so no libmpv, libdvdcss, or optical drive is needed.
 /// Real libdvdnav timing, HWND rendering, and disc behaviour still require TESTING.md.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     private static readonly DvdHostTimeouts TestTimeouts = new(
         Connect: TimeSpan.FromSeconds(3),
@@ -34,8 +34,8 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
-        var checks = new (string Name, Func<Task> Run)[]
-        {
+        (string Name, Func<Task> Run)[] checks =
+        [
             ("protocol: shutdown is acknowledged before the request loop returns", ShutdownAcknowledgedBeforeLoopReturnsAsync),
             ("protocol: a failing request gets an error response and the loop continues", FailingRequestKeepsLoopAsync),
             ("client: graceful shutdown is acknowledged and the host exits normally", GracefulShutdownAcknowledgedAsync),
@@ -58,8 +58,9 @@ internal static class Program
             ("service: rapid concurrent title switches leave one controlled host", ServiceRapidReplacementAsync),
             ("service: failure before routing is claimed keeps current playback", ServiceEarlyFailureKeepsPlaybackAsync),
             ("service: cancelled replacement leaves no host running", ServiceCancelledReplacementAsync),
-            ("service: dispose with a hung host is bounded", ServiceDisposeHungHostAsync)
-        };
+            ("service: dispose with a hung host is bounded", ServiceDisposeHungHostAsync),
+            .. TitleMatchingChecks
+        ];
 
         var filter = args.FirstOrDefault();
         var failed = 0;
@@ -543,6 +544,8 @@ internal static class Program
     {
         Environment.SetEnvironmentVariable("PARALLAX_DVD_STUB_MODE", mode);
         Environment.SetEnvironmentVariable("PARALLAX_DVD_STUB_DELAY_MS", delayMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Environment.SetEnvironmentVariable("PARALLAX_DVD_STUB_DURATION", null);
+        Environment.SetEnvironmentVariable("PARALLAX_DVD_STUB_CHAPTERS", null);
     }
 
     private static bool IsAlive(int pid)

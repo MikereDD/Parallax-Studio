@@ -49,6 +49,16 @@ DVD authoring is inconsistent. MakeMKV discovery indices and libdvdnav `dvd://N`
 
 Parallax Studio therefore does not permanently assume that metadata title N equals DVD program N. v1.0-dev.5.5.5 reads the libdvdnav edition table and compares actual program runtimes against MakeMKV discovery metadata. Confident matches form a per-disc title map. Unknown/ambiguous selections are rejected rather than silently loading a different program.
 
+A match is accepted only when it is unique in both directions within a 15-second runtime window (`DvdTitleMatcher.RuntimeWindow`). The metadata title must have exactly one DVD title within the window, and that DVD title must have exactly one metadata title within it. The two tools report the same program a few seconds apart; the regression disc shows 6–7 s. As a result, the closest candidate is not evidence when two titles are within the window of each other, and title or selector order is never used to break a tie. Titles that fail this test are logged as `not mapped (ambiguous)` or `not mapped (unmatched)` with the competing or nearest titles, and they are refused for direct playback.
+
+After a title loads, its runtime and chapter count (±1 chapter) are checked with the same rule:
+
+- **Unique and agreeing:** the mapping is verified.
+- **Ambiguous:** the existing mapping is kept and reported as unverified.
+- **Unique but disagreeing with the full map:** both claims are withdrawn rather than overwritten, and logged as a reconciliation conflict.
+
+The `DVD title-map inputs` log line records every runtime used, for tuning against real discs.
+
 Future work will persist verified mappings between sessions and add optional metadata enrichment for discs that do not contain useful title names.
 
 ## Disc identity and cache direction
