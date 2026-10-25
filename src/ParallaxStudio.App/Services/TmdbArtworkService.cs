@@ -24,6 +24,10 @@ public sealed record TmdbArtworkQuery(string Title, int? Year, string CacheIdent
         @"\s+\b(?:2160p|1080p|720p|480p|uhd|blu-?ray|bdrip|remux|web-?dl|webrip|hdtv|x264|x265|h\.?264|h\.?265|hevc|av1|hdr10\+?|hdr|dolby[ ._-]?vision|dv|truehd|dts(?:-hd)?|aac)\b.*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    private static readonly Regex DvdTvBoxSet = new(
+        @"^(?<title>.+?)\s+(?:COMPLETE\s+)?(?:SERIES|SEASON)\s+(?<year>19\d{2}|20\d{2})(?:\s+(?:(?:DISC|DISK)\s*\d+|D\s*\d+))?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex Punctuation = new(@"[^\p{L}\p{Nd}]+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -92,6 +96,49 @@ public sealed record TmdbArtworkQuery(string Title, int? Year, string CacheIdent
         return new TmdbArtworkQuery(raw, year, identity);
     }
 
+    public static TmdbTvBoxSetHint? CreateDvdTvBoxSetHint(
+        string? source,
+        string? playbackTitle)
+    {
+        if (source?.StartsWith(
+                "DVD disc",
+                StringComparison.OrdinalIgnoreCase) != true)
+        {
+            return null;
+        }
+
+        var raw = playbackTitle?.Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        raw = raw.Replace('_', ' ').Replace('.', ' ');
+        raw = OpticalSuffix.Replace(raw, string.Empty);
+        raw = Whitespace.Replace(raw, " ")
+            .Trim(' ', '-', '–', '—', '.', '_');
+
+        var match = DvdTvBoxSet.Match(raw);
+        if (!match.Success)
+            return null;
+
+        var title = Whitespace.Replace(
+            match.Groups["title"].Value,
+            " ").Trim();
+
+        if (Normalize(title).Length < 2)
+            return null;
+
+        if (!int.TryParse(
+                match.Groups["year"].Value,
+                out var seasonYear))
+        {
+            return null;
+        }
+
+        return new TmdbTvBoxSetHint(
+            title,
+            seasonYear);
+    }
+
     public static string Normalize(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return string.Empty;
@@ -110,6 +157,8 @@ public sealed record TmdbArtworkQuery(string Title, int? Year, string CacheIdent
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException) { return false; }
     }
 }
+
+public sealed record TmdbTvBoxSetHint(string SearchTitle, int SeasonYear);
 
 public sealed record TmdbArtworkCandidate(
     int Id,
@@ -250,7 +299,16 @@ public sealed class TmdbArtworkService
             if (match is null)
             {
                 var tvCandidates = await SearchAsync("tv", query, cancellationToken).ConfigureAwait(false);
+                var tvMatches = EligibleExactCandidates(query, tvCandidates);
                 match = SelectBestCandidate(query, tvCandidates);
+                if (match is null && tvMatches.Length == 0)
+                {
+                    match = await ResolveDvdTvBoxSetAsync(
+                        source,
+                        playbackTitle,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
                 if (match is null) return null;
             }
 
@@ -400,6 +458,141 @@ public sealed class TmdbArtworkService
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return TryGetInt(document.RootElement, "runtime");
+    }
+
+    private async Task<TmdbArtworkCandidate?> ResolveDvdTvBoxSetAsync(
+        string? source,
+        string? playbackTitle,
+        CancellationToken cancellationToken)
+    {
+        var hint = TmdbArtworkQuery.CreateDvdTvBoxSetHint(
+            source,
+            playbackTitle);
+
+        if (hint is null)
+            return null;
+
+        // Do not pass the packaging year as first_air_date_year.
+        // For box sets such as "COMPLETE SERIES 2018", it describes
+        // season/content context rather than the show's premiere year.
+        var hintQuery = new TmdbArtworkQuery(
+            hint.SearchTitle,
+            null,
+            $"dvd-tv-hint|{TmdbArtworkQuery.Normalize(hint.SearchTitle)}|{hint.SeasonYear}");
+
+        var candidates = await SearchAsync(
+            "tv",
+            hintQuery,
+            cancellationToken).ConfigureAwait(false);
+
+        var normalizedHint = NormalizeTvBoxTitle(
+            hint.SearchTitle);
+
+        if (string.IsNullOrWhiteSpace(normalizedHint))
+            return null;
+
+        // Alias normalization is deliberately narrow. "Dr." -> "Doctor"
+        // is token-level language normalization, not a Doctor Who special case.
+        var exactTitleCandidates = candidates
+            .Where(candidate =>
+                !string.IsNullOrWhiteSpace(candidate.PosterPath) &&
+                CandidateTitles(candidate).Any(title =>
+                    string.Equals(
+                        NormalizeTvBoxTitle(title),
+                        normalizedHint,
+                        StringComparison.Ordinal)))
+            .Take(9)
+            .ToArray();
+
+        if (exactTitleCandidates.Length is 0 or > 8)
+            return null;
+
+        var seasonMatches = new List<TmdbArtworkCandidate>();
+
+        foreach (var candidate in exactTitleCandidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (await TvCandidateHasSeasonYearAsync(
+                    candidate.Id,
+                    hint.SeasonYear,
+                    cancellationToken).ConfigureAwait(false))
+            {
+                seasonMatches.Add(candidate);
+            }
+        }
+
+        return seasonMatches.Count == 1
+            ? seasonMatches[0]
+            : null;
+    }
+
+    private static string NormalizeTvBoxTitle(string? value)
+    {
+        var normalized = TmdbArtworkQuery.Normalize(value);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return string.Empty;
+
+        var tokens = normalized.Split(
+            ' ',
+            StringSplitOptions.RemoveEmptyEntries);
+
+        for (var index = 0; index < tokens.Length; index++)
+        {
+            if (string.Equals(
+                    tokens[index],
+                    "dr",
+                    StringComparison.Ordinal))
+            {
+                tokens[index] = "doctor";
+            }
+        }
+
+        return string.Join(' ', tokens);
+    }
+
+    private async Task<bool> TvCandidateHasSeasonYearAsync(
+        int tvId,
+        int seasonYear,
+        CancellationToken cancellationToken)
+    {
+        var url =
+            $"https://api.themoviedb.org/3/tv/{tvId}?language=en-US";
+
+        using var response = await SendApiAsync(
+            url,
+            cancellationToken).ConfigureAwait(false);
+
+        if (response is null || !response.IsSuccessStatusCode)
+            return false;
+
+        await using var stream = await response.Content
+            .ReadAsStreamAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        using var document = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (!document.RootElement.TryGetProperty(
+                "seasons",
+                out var seasons) ||
+            seasons.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var season in seasons.EnumerateArray())
+        {
+            var airDate = TryGetString(
+                season,
+                "air_date");
+
+            if (ParseYear(airDate) == seasonYear)
+                return true;
+        }
+
+        return false;
     }
 
     private async Task<IReadOnlyList<TmdbArtworkCandidate>> SearchAsync(

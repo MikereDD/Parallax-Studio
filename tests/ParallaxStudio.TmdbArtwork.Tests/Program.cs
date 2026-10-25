@@ -23,6 +23,8 @@ internal static class Program
             ("movie match wins before TV fallback", MovieWinsBeforeTvAsync),
             ("localized title collision prefers exact original title", LocalizedTitleCollisionPrefersOriginalAsync),
             ("runtime disambiguates duplicate exact movie titles", RuntimeDisambiguatesMovieAsync),
+            ("DVD TV box-set season year resolves series", DvdTvBoxSetSeasonYearAsync),
+            ("DVD TV box-set ambiguous season year is refused", DvdTvBoxSetAmbiguityAsync),
             ("ambiguous title-only lookup is refused", AmbiguousTitleRefusedAsync),
             ("network failure degrades cleanly", NetworkFailureAsync),
             ("corrupt poster is rejected", CorruptPosterRejectedAsync),
@@ -278,6 +280,176 @@ internal static class Program
         Expect(
             Directory.EnumerateFiles(temp.Path, "*.image").Count() == 1,
             "runtime-resolved poster should create exactly one runtime-specific cache entry");
+    }
+
+    private static async Task DvdTvBoxSetSeasonYearAsync()
+    {
+        using var temp = new TempDirectory();
+
+        var handler = new FakeHandler(request =>
+        {
+            var url = request.RequestUri!.AbsoluteUri;
+
+            if (url.Contains("/search/movie", StringComparison.Ordinal))
+                return Json("""{"results":[]}""");
+
+            if (url.Contains("/search/tv", StringComparison.Ordinal))
+            {
+                if (url.Contains("query=DR%20WHO&", StringComparison.Ordinal))
+                {
+                    return Json(
+                        """{"results":[{"id":57243,"name":"Doctor Who","original_name":"Doctor Who","first_air_date":"2005-03-26","poster_path":"/doctor-who.jpg"},{"id":121,"name":"Doctor Who","original_name":"Doctor Who","first_air_date":"1963-11-23","poster_path":"/classic-who.jpg"},{"id":1056,"name":"Doctor Who Confidential","original_name":"Doctor Who Confidential","first_air_date":"2005-03-26","poster_path":"/confidential.jpg"}]}""");
+                }
+
+                return Json("""{"results":[]}""");
+            }
+
+            if (url.Contains("/tv/57243?", StringComparison.Ordinal))
+            {
+                return Json(
+                    """{"id":57243,"seasons":[{"season_number":11,"name":"Series 11","air_date":"2018-10-07","episode_count":10}]}""");
+            }
+
+            if (url.Contains("/tv/121?", StringComparison.Ordinal))
+            {
+                return Json(
+                    """{"id":121,"seasons":[{"season_number":26,"name":"Season 26","air_date":"1989-09-06","episode_count":14}]}""");
+            }
+
+            if (url.EndsWith("/3/configuration", StringComparison.Ordinal))
+            {
+                return Json(
+                    """{"images":{"secure_base_url":"https://image.tmdb.org/t/p/","poster_sizes":["w342","w500","w780"]}}""");
+            }
+
+            if (url.Contains(
+                    "/w500/doctor-who.jpg",
+                    StringComparison.Ordinal))
+            {
+                return Bytes(TinyPng);
+            }
+
+            return new HttpResponseMessage(
+                HttpStatusCode.NotFound);
+        });
+
+        using var http = new HttpClient(handler);
+
+        var service = new TmdbArtworkService(
+            http,
+            "test-token",
+            temp.Path);
+
+        var result = await service.LoadAsync(
+            @"DVD disc • D:\ • DVD title 1",
+            "DR WHO COMPLETE SERIES 2018 D13 — 13 chapter(s), 2.1 GB (C1)",
+            true,
+            true);
+
+        Expect(
+            result is not null,
+            "2018 DVD box-set label should resolve Doctor Who (2005)");
+
+        Expect(
+            handler.Urls.Any(url =>
+                url.Contains(
+                    "query=DR%20WHO&",
+                    StringComparison.Ordinal)),
+            "DVD box-set fallback should search the cleaned TV title");
+
+        Expect(
+            handler.Urls.Any(url =>
+                url.Contains(
+                    "/tv/57243?",
+                    StringComparison.Ordinal)),
+            "DVD box-set fallback should inspect the 2005 series seasons");
+
+        Expect(
+            handler.Urls.Any(url =>
+                url.Contains(
+                    "/tv/121?",
+                    StringComparison.Ordinal)),
+            "DVD box-set fallback should inspect the classic series seasons");
+
+        Expect(
+            handler.Urls.Any(url =>
+                url.Contains(
+                    "/w500/doctor-who.jpg",
+                    StringComparison.Ordinal)),
+            "DVD box-set season-year match should select the 2005 series poster");
+
+        var query = TmdbArtworkQuery.Create(
+            @"DVD disc • D:\ • DVD title 1",
+            "DR WHO COMPLETE SERIES 2018 D13 — 13 chapter(s), 2.1 GB (C1)")!;
+
+        Expect(
+            File.Exists(service.GetCachePath(query)),
+            "DVD box-set poster should use the normal disc-label cache");
+    }
+
+    private static async Task DvdTvBoxSetAmbiguityAsync()
+    {
+        using var temp = new TempDirectory();
+
+        var handler = new FakeHandler(request =>
+        {
+            var url = request.RequestUri!.AbsoluteUri;
+
+            if (url.Contains("/search/movie", StringComparison.Ordinal))
+                return Json("""{"results":[]}""");
+
+            if (url.Contains("/search/tv", StringComparison.Ordinal))
+            {
+                if (url.Contains("query=DR%20WHO&", StringComparison.Ordinal))
+                {
+                    return Json(
+                        """{"results":[{"id":1,"name":"Doctor Who","original_name":"Doctor Who","first_air_date":"2005-03-26","poster_path":"/one.jpg"},{"id":2,"name":"Doctor Who","original_name":"Doctor Who","first_air_date":"1963-11-23","poster_path":"/two.jpg"}]}""");
+                }
+
+                return Json("""{"results":[]}""");
+            }
+
+            if (url.Contains("/tv/1?", StringComparison.Ordinal) ||
+                url.Contains("/tv/2?", StringComparison.Ordinal))
+            {
+                return Json(
+                    """{"seasons":[{"season_number":1,"air_date":"2018-01-01","episode_count":10}]}""");
+            }
+
+            if (url.EndsWith("/3/configuration", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Ambiguous DVD TV box-set lookup must not request image configuration.");
+            }
+
+            if (url.Contains(
+                    "image.tmdb.org",
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Ambiguous DVD TV box-set lookup must not request a poster.");
+            }
+
+            return new HttpResponseMessage(
+                HttpStatusCode.NotFound);
+        });
+
+        using var http = new HttpClient(handler);
+
+        var service = new TmdbArtworkService(
+            http,
+            "test-token",
+            temp.Path);
+
+        var result = await service.LoadAsync(
+            @"DVD disc • D:\ • DVD title 1",
+            "DR WHO COMPLETE SERIES 2018 D13 — 13 chapter(s), 2.1 GB (C1)",
+            true,
+            false);
+
+        Expect(
+            result is null,
+            "multiple exact series with the same season year must remain ambiguous");
     }
 
     private static async Task AmbiguousTitleRefusedAsync()
