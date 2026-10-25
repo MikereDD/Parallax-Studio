@@ -2,7 +2,7 @@ namespace ParallaxStudio.Core.Models;
 
 public sealed class AppSettings
 {
-    public int SchemaVersion { get; set; } = 4;
+    public int SchemaVersion { get; set; } = 5;
     public double Volume { get; set; } = 68;
     public string? LastOpenDirectory { get; set; }
     public double WindowWidth { get; set; } = 1380;
@@ -14,6 +14,7 @@ public sealed class AppSettings
     public string TypographyProfile { get; set; } = "Cadence";
     public string TextSize { get; set; } = "Standard";
     public bool ReduceMotion { get; set; }
+    public string InterfaceDensity { get; set; } = "Comfortable";
 
     // Cinema behavior
     public bool CinemaAutoExpand { get; set; } = true;

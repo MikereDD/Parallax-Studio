@@ -86,8 +86,8 @@ public sealed record MediaTrack(
         var normalized = codec.Trim().ToLowerInvariant().Replace('_', '-');
         return normalized switch
         {
-            "dts" => "DTS",
-            "dts-hd" or "dca" => "DTS-HD",
+            "dts" or "dca" => "DTS",
+            "dts-hd" => "DTS-HD",
             "truehd" => "Dolby TrueHD",
             "eac3" or "e-ac-3" => "Dolby Digital Plus",
             "ac3" or "ac-3" => "Dolby Digital",

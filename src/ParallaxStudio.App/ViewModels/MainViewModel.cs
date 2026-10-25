@@ -2,6 +2,7 @@ using System.IO;
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using ParallaxStudio.App.Common;
 using ParallaxStudio.App.Services;
 using ParallaxStudio.Core;
@@ -64,6 +65,19 @@ public sealed class MainViewModel : ObservableObject
     private string? _activeResumePath;
     private DateTimeOffset _lastResumePersistUtc = DateTimeOffset.MinValue;
     private bool _hasActiveMedia;
+    private readonly LocalArtworkService _artworkService = new();
+    private CancellationTokenSource? _artworkCancellation;
+    private ImageSource? _artwork;
+    private string? _presentationSource;
+    private int _mediaGeneration;
+    private int _automaticRefreshGeneration = -1;
+    private IReadOnlyList<MediaTrack> _presentationTracks = [];
+    private IReadOnlyList<MediaChapter> _presentationChapters = [];
+    private string _metadataStatus = "Open media to see its details.";
+    private string _nowPlayingStateText = "READY";
+    private double _nowPlayingProgress;
+    private string _progressText = "Ready for your next screening";
+    private string _remainingText = string.Empty;
 
     public MainViewModel(
         IPlaybackService playback,
@@ -120,6 +134,15 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<MediaTrack> SubtitleTracks { get; } = [];
     public ObservableCollection<MediaChapter> Chapters { get; } = [];
     public ObservableCollection<BluRayTitle> BluRayTitles { get; } = [];
+    public ObservableCollection<string> MediaBadges { get; } = [];
+    public ObservableCollection<MediaDetailRow> MediaDetails { get; } = [];
+    public ImageSource? Artwork { get => _artwork; private set => SetProperty(ref _artwork, value); }
+    public string SourceLocation => _presentationSource ?? string.Empty;
+    public string MetadataStatus { get => _metadataStatus; private set => SetProperty(ref _metadataStatus, value); }
+    public string NowPlayingStateText { get => _nowPlayingStateText; private set => SetProperty(ref _nowPlayingStateText, value); }
+    public double NowPlayingProgress { get => _nowPlayingProgress; private set => SetProperty(ref _nowPlayingProgress, value); }
+    public string ProgressText { get => _progressText; private set => SetProperty(ref _progressText, value); }
+    public string RemainingText { get => _remainingText; private set => SetProperty(ref _remainingText, value); }
     public bool IsRefreshingMediaNavigation => _isRefreshingMediaNavigation;
     public bool IsBluRayTitleDiscoveryBusy
     {
@@ -142,6 +165,7 @@ public sealed class MainViewModel : ObservableObject
     }
     public IReadOnlyList<string> ThemeNames => StudioAppearanceService.Themes;
     public IReadOnlyList<string> TypographyNames => StudioAppearanceService.TypographyProfiles;
+    public IReadOnlyList<string> InterfaceDensities => StudioAppearanceService.InterfaceDensities;
     public IReadOnlyList<int> FullscreenControlTimeoutOptions { get; } = [2, 3, 4, 5, 8];
     public IReadOnlyList<int> SeekStepOptions { get; } = [5, 10, 15, 30];
     public string SeekBackToolTip => $"Back {SeekStepSeconds} seconds (←)";
@@ -409,7 +433,25 @@ public sealed class MainViewModel : ObservableObject
     public bool ReduceMotion
     {
         get => _settings.ReduceMotion;
-        set => UpdateCinemaSetting(_settings.ReduceMotion, value, v => _settings.ReduceMotion = v, nameof(ReduceMotion));
+        set
+        {
+            UpdateCinemaSetting(_settings.ReduceMotion, value, v => _settings.ReduceMotion = v, nameof(ReduceMotion));
+            StudioAppearanceService.ApplyMotion(value);
+        }
+    }
+
+    public string InterfaceDensity
+    {
+        get => _settings.InterfaceDensity;
+        set
+        {
+            var normalized = value == "Compact" ? "Compact" : "Comfortable";
+            if (_settings.InterfaceDensity == normalized) return;
+            _settings.InterfaceDensity = normalized;
+            StudioAppearanceService.ApplyDensity(normalized);
+            OnPropertyChanged();
+            QueueSettingsSave();
+        }
     }
 
     public bool ResumePlayback
@@ -464,6 +506,8 @@ public sealed class MainViewModel : ObservableObject
         _selectedTypography = _settings.TypographyProfile;
         StudioAppearanceService.ApplyTheme(_selectedTheme);
         StudioAppearanceService.ApplyTypography(_selectedTypography, _settings.TextSize);
+        StudioAppearanceService.ApplyDensity(_settings.InterfaceDensity);
+        StudioAppearanceService.ApplyMotion(_settings.ReduceMotion);
         OnPropertyChanged(nameof(Volume));
         OnPropertyChanged(nameof(SelectedTheme));
         OnPropertyChanged(nameof(SelectedTypography));
@@ -477,6 +521,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(EscapeExitsFullscreen));
         OnPropertyChanged(nameof(RememberWindowGeometry));
         OnPropertyChanged(nameof(ReduceMotion));
+        OnPropertyChanged(nameof(InterfaceDensity));
         OnPropertyChanged(nameof(ResumePlayback));
         OnPropertyChanged(nameof(SeekStepSeconds));
         OnPropertyChanged(nameof(SeekBackToolTip));
@@ -537,6 +582,8 @@ public sealed class MainViewModel : ObservableObject
         // Detach before disposal so the polling thread can never block waiting
         // for the WPF dispatcher while the UI thread is shutting down.
         _playback.StateChanged -= OnPlaybackStateChanged;
+        _artworkCancellation?.Cancel();
+        _artworkCancellation?.Dispose();
 
         CancelBluRayTitleDiscovery();
         _discWatchCancellation.Cancel();
@@ -665,6 +712,8 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task<bool> RefreshMediaNavigationAsync()
     {
+        var generation = _mediaGeneration;
+        var source = _playback.Snapshot.Source;
         if (_playback.Snapshot.State == PlaybackState.Loading)
         {
             await _logger.InfoAsync("Deferred media-navigation refresh while the selected title is still loading.");
@@ -673,6 +722,11 @@ public sealed class MainViewModel : ObservableObject
 
         var tracks = await _playback.GetTracksAsync();
         var chapters = await _playback.GetChaptersAsync();
+        // A slow read for the previous file/title must never populate the next one.
+        if (_shutdown || generation != _mediaGeneration ||
+            !string.Equals(source, _presentationSource, StringComparison.Ordinal) ||
+            !string.Equals(source, _playback.Snapshot.Source, StringComparison.Ordinal) ||
+            _playback.Snapshot.State is not (PlaybackState.Playing or PlaybackState.Paused)) return false;
 
         // During fullscreen restoration mpv may briefly expose an incomplete track-list.
         // Never replace a populated UI with that transient snapshot.
@@ -704,7 +758,10 @@ public sealed class MainViewModel : ObservableObject
             _isRefreshingMediaNavigation = false;
         }
 
-        MediaDetailsText = BuildMediaDetails(tracks, chapters, _playback.Snapshot);
+        _presentationTracks = tracks;
+        _presentationChapters = chapters;
+        MetadataStatus = tracks.Count > 0 || chapters.Count > 0 ? string.Empty : "Media details are not available yet.";
+        UpdateMediaPresentation(_playback.Snapshot);
 
         await _logger.InfoAsync($"Media navigation refreshed: {AudioTracks.Count} audio, {Math.Max(0, SubtitleTracks.Count - 1)} subtitles, {Chapters.Count} chapters.");
         return tracks.Count > 0 || chapters.Count > 0;
@@ -712,8 +769,10 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task<bool> RefreshMediaNavigationWithRetryAsync(int attempts = 120, int delayMilliseconds = 500)
     {
+        var generation = _mediaGeneration;
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
+            if (_shutdown || generation != _mediaGeneration) return false;
             if (_playback.Snapshot.State is PlaybackState.Faulted or PlaybackState.Stopped) return false;
             if (_playback.Snapshot.State == PlaybackState.Loading)
             {
@@ -1431,11 +1490,21 @@ public sealed class MainViewModel : ObservableObject
         void Apply()
         {
             var snapshot = e.Snapshot;
+            if (!string.Equals(snapshot.Source, _playback.Snapshot.Source, StringComparison.Ordinal)) return;
+            if (snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused &&
+                (!string.Equals(_presentationSource, snapshot.Source, StringComparison.Ordinal) ||
+                 (snapshot.State == PlaybackState.Loading && _currentPlaybackState != PlaybackState.Loading)))
+                ResetMediaPresentation(snapshot.Source);
             HasActiveMedia = snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused;
             NowPlayingTitle = HasActiveMedia ? snapshot.Title : "Nothing playing";
-            SourceText = HasActiveMedia ? snapshot.Source ?? "Media source" : "Open a video to begin";
+            SourceText = HasActiveMedia ? MediaPresentation.SourceSummary(snapshot.Source) : "Open a video to begin";
             if (!HasActiveMedia)
-                MediaDetailsText = "Open a video or play a disc to see codec, format, audio, subtitle, and chapter details.";
+            {
+                if (MediaDetails.Count > 0 || Artwork is not null || _presentationTracks.Count > 0)
+                    ResetMediaPresentation(null);
+                MetadataStatus = "Open media to see its details.";
+                MediaDetailsText = MetadataStatus;
+            }
             PositionText = FormatTime(snapshot.Position);
             DurationText = FormatTime(snapshot.Duration);
             PositionSeconds = snapshot.Position.TotalSeconds;
@@ -1443,6 +1512,16 @@ public sealed class MainViewModel : ObservableObject
             if (!IsScrubbing) ScrubPosition = snapshot.Position.TotalSeconds;
             IsMuted = snapshot.IsMuted;
             PlayPauseText = snapshot.State == PlaybackState.Paused ? "Play" : "Pause";
+            UpdateMediaPresentation(snapshot);
+
+            // Refresh on the first usable snapshot, even if the title browser is closed.
+            // This only reads the existing playback state; it never starts a disc scan.
+            if (HasActiveMedia && snapshot.State is PlaybackState.Playing or PlaybackState.Paused &&
+                _automaticRefreshGeneration != _mediaGeneration)
+            {
+                _automaticRefreshGeneration = _mediaGeneration;
+                _ = RefreshPresentationMetadataAsync(_mediaGeneration);
+            }
 
             var previousState = _currentPlaybackState;
             _currentPlaybackState = snapshot.State;
@@ -1476,6 +1555,7 @@ public sealed class MainViewModel : ObservableObject
             // authoritative signal to refresh the title browser, rather than relying on
             // a short timing-based retry window during initial loading.
             if (_activeDisc?.Kind == DiscKind.Dvd &&
+                snapshot.Source?.StartsWith("DVD disc", StringComparison.OrdinalIgnoreCase) == true &&
                 IsBluRayPanelOpen &&
                 snapshot.State is PlaybackState.Playing or PlaybackState.Paused &&
                 snapshot.Duration > TimeSpan.Zero &&
@@ -1580,82 +1660,103 @@ public sealed class MainViewModel : ObservableObject
             new ResumeEntry(path, position, duration, now)).ConfigureAwait(false);
     }
 
-    private string BuildMediaDetails(
-        IReadOnlyList<MediaTrack> tracks,
-        IReadOnlyList<MediaChapter> chapters,
-        PlaybackSnapshot snapshot)
+    private void ResetMediaPresentation(string? source)
     {
-        var lines = new List<string>();
-
-        var video = tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Video && track.IsSelected)
-            ?? tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Video);
-        if (video is not null)
+        _mediaGeneration++;
+        _presentationSource = source;
+        _presentationTracks = [];
+        _presentationChapters = [];
+        MediaDetails.Clear();
+        MediaBadges.Clear();
+        MetadataStatus = "Reading media details…";
+        MediaDetailsText = MetadataStatus;
+        _isRefreshingMediaNavigation = true;
+        try
         {
-            var videoParts = new[]
+            AudioTracks.Clear();
+            SubtitleTracks.Clear();
+            Chapters.Clear();
+        }
+        finally { _isRefreshingMediaNavigation = false; }
+        OnPropertyChanged(nameof(SourceLocation));
+        _artworkCancellation?.Cancel();
+        _artworkCancellation?.Dispose();
+        _artworkCancellation = new CancellationTokenSource();
+        Artwork = null;
+        // Only file paths enter artwork lookup. Reading a physical disc for artwork
+        // during playback could contend with libbluray/libdvdnav.
+        if (MediaPresentation.SourceKind(source) == "Local file")
+            _ = LoadArtworkAsync(source, _mediaGeneration, _artworkCancellation.Token);
+    }
+
+    private async Task LoadArtworkAsync(string? source, int generation, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var artwork = await _artworkService.LoadAsync(source, cancellationToken);
+            if (!_shutdown && !cancellationToken.IsCancellationRequested && generation == _mediaGeneration)
+                Artwork = artwork;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { await _logger.WarningAsync($"Local artwork could not be loaded: {ex.Message}"); }
+    }
+
+    private void UpdateMediaPresentation(PlaybackSnapshot snapshot)
+    {
+        NowPlayingStateText = snapshot.State switch
+        {
+            PlaybackState.Loading => "LOADING",
+            PlaybackState.Playing => "PLAYING",
+            PlaybackState.Paused => "PAUSED",
+            PlaybackState.Faulted => "UNAVAILABLE",
+            _ => "READY"
+        };
+        var knownRuntime = HasActiveMedia && snapshot.Duration > TimeSpan.Zero;
+        NowPlayingProgress = knownRuntime ? Math.Clamp(snapshot.Position.TotalSeconds / snapshot.Duration.TotalSeconds * 100, 0, 100) : 0;
+        ProgressText = !HasActiveMedia ? "Ready for your next screening" : knownRuntime
+            ? $"{FormatTime(snapshot.Position)} / {FormatTime(snapshot.Duration)}" : "Reading runtime…";
+        RemainingText = knownRuntime ? $"{FormatTime(snapshot.Duration > snapshot.Position ? snapshot.Duration - snapshot.Position : TimeSpan.Zero)} left" : string.Empty;
+        if (!HasActiveMedia) return;
+        ReplaceIfChanged(MediaBadges, MediaPresentation.Badges(snapshot.Source, _presentationTracks));
+        ReplaceIfChanged(MediaDetails, MediaPresentation.Details(snapshot, _presentationTracks, _presentationChapters));
+        MediaDetailsText = string.Join(Environment.NewLine, MediaDetails.Select(row => $"{row.Label}: {row.Value}"));
+    }
+
+    private static void ReplaceIfChanged<T>(ObservableCollection<T> target, IReadOnlyList<T> values)
+    {
+        if (target.SequenceEqual(values)) return;
+        target.Clear();
+        foreach (var value in values) target.Add(value);
+    }
+
+    private async Task RefreshPresentationMetadataAsync(int generation)
+    {
+        try
+        {
+            // A short delay lets decoder properties settle after file-loaded.
+            // Keep polling existing state briefly: tracks can precede video-params.
+            for (var attempt = 0; attempt < 8; attempt++)
             {
-                FormatVideoCodec(video.Codec),
-                video.Details
-            }.Where(value => !string.IsNullOrWhiteSpace(value));
-            lines.Add($"VIDEO   {string.Join(" • ", videoParts)}");
+                await Task.Delay(attempt == 0 ? 150 : 750);
+                if (_shutdown || generation != _mediaGeneration ||
+                    _playback.Snapshot.State is not (PlaybackState.Playing or PlaybackState.Paused)) return;
+                await RefreshMediaNavigationAsync();
+            }
+            if (generation == _mediaGeneration && _presentationTracks.Count == 0 && _presentationChapters.Count == 0)
+                MetadataStatus = "No additional media details were reported.";
         }
-
-        var audio = tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Audio && track.IsSelected)
-            ?? tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Audio);
-        if (audio is not null)
+        catch (Exception ex)
         {
-            var audioText = string.IsNullOrWhiteSpace(audio.SecondaryText)
-                ? audio.PrimaryText
-                : $"{audio.PrimaryText} • {audio.SecondaryText}";
-            lines.Add($"AUDIO   {audioText}");
+            if (generation == _mediaGeneration) MetadataStatus = "Media details are temporarily unavailable.";
+            await _logger.WarningAsync($"Presentation metadata refresh failed: {ex.Message}");
         }
-
-        var subtitle = tracks.FirstOrDefault(track => track.Kind == MediaTrackKind.Subtitle && track.IsSelected);
-        lines.Add(subtitle is null
-            ? "SUBS    Off"
-            : $"SUBS    {subtitle.PrimaryText}");
-
-        var sourceKind = _activeDisc?.Kind switch
-        {
-            DiscKind.BluRay => "Blu-ray",
-            DiscKind.Dvd => "DVD",
-            _ when snapshot.Source?.StartsWith("Blu-ray", StringComparison.OrdinalIgnoreCase) == true => "Blu-ray",
-            _ when snapshot.Source?.StartsWith("DVD", StringComparison.OrdinalIgnoreCase) == true => "DVD",
-            _ => "File"
-        };
-
-        var sourceParts = new List<string> { sourceKind };
-        if (snapshot.Duration > TimeSpan.Zero)
-            sourceParts.Add(FormatTime(snapshot.Duration));
-        if (chapters.Count > 0)
-            sourceParts.Add($"{chapters.Count} chapter{(chapters.Count == 1 ? string.Empty : "s")}");
-        lines.Add($"SOURCE  {string.Join(" • ", sourceParts)}");
-
-        return lines.Count == 0
-            ? "Media metadata is still loading."
-            : string.Join(Environment.NewLine, lines);
     }
 
-    private static string? FormatVideoCodec(string? codec)
-    {
-        if (string.IsNullOrWhiteSpace(codec)) return null;
-        return codec.Trim().ToLowerInvariant() switch
-        {
-            "hevc" or "h265" or "hev1" or "hvc1" => "HEVC",
-            "h264" or "avc1" => "H.264",
-            "av1" => "AV1",
-            "vp9" => "VP9",
-            "mpeg2video" => "MPEG-2",
-            "vc1" => "VC-1",
-            _ => codec.Trim().ToUpperInvariant()
-        };
-    }
-
-    private static string FormatTime(TimeSpan value) =>
-        value.TotalHours >= 1 ? value.ToString(@"h\:mm\:ss") : value.ToString(@"mm\:ss");
+    private static string FormatTime(TimeSpan value) => MediaPresentation.Time(value);
 
     private static void CopySettings(AppSettings source, AppSettings destination)
     {
-        destination.SchemaVersion = Math.Max(4, source.SchemaVersion);
+        destination.SchemaVersion = Math.Max(5, source.SchemaVersion);
         destination.Volume = Math.Clamp(source.Volume, 0, 100);
         destination.LastOpenDirectory = source.LastOpenDirectory;
         destination.WindowWidth = source.WindowWidth;
@@ -1667,6 +1768,7 @@ public sealed class MainViewModel : ObservableObject
         destination.TypographyProfile = string.IsNullOrWhiteSpace(source.TypographyProfile) ? "Cadence" : source.TypographyProfile;
         destination.TextSize = string.IsNullOrWhiteSpace(source.TextSize) ? "Standard" : source.TextSize;
         destination.ReduceMotion = source.ReduceMotion;
+        destination.InterfaceDensity = source.InterfaceDensity == "Compact" ? "Compact" : "Comfortable";
         destination.CinemaAutoExpand = source.CinemaAutoExpand;
         destination.RestoreSidebarWhenPlaybackStops = source.RestoreSidebarWhenPlaybackStops;
         destination.ShowSidebarWhenPaused = source.ShowSidebarWhenPaused;

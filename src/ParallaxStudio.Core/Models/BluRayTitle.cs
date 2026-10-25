@@ -46,7 +46,7 @@ public sealed record BluRayTitle(
     }
 
     public string DurationText => Duration > TimeSpan.Zero
-        ? Duration.TotalHours >= 1 ? Duration.ToString(@"h\:mm\:ss") : Duration.ToString(@"m\:ss")
+        ? Duration.TotalHours >= 1 ? $"{(int)Duration.TotalHours}:{Duration:mm\\:ss}" : Duration.ToString(@"m\:ss")
         : "Duration unavailable";
 
     public string DetailText

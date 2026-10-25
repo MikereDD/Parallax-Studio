@@ -7,7 +7,7 @@
         AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" ShowActivated="False" Topmost="True"
         Focusable="False">
-    <Border Style="{StaticResource TransportBorder}" Padding="16,12" Margin="10">
+    <Border Style="{StaticResource TransportBorder}" Padding="{DynamicResource StudioFloatingTransportPadding}" Margin="10">
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
@@ -16,7 +16,7 @@
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekBackCommand}" ToolTip="{Binding SeekBackToolTip}" />
-                <Button Content="{Binding PlayPauseGlyph}" Style="{StaticResource PrimaryButton}" Command="{Binding PlayPauseCommand}" Width="58" Height="44" Margin="8,0" FontFamily="Segoe Fluent Icons" FontSize="18" Padding="0" ToolTip="Play or pause" />
+                <Button Content="{Binding PlayPauseGlyph}" Style="{StaticResource PrimaryButton}" Command="{Binding PlayPauseCommand}" Width="{DynamicResource StudioPlayButtonWidth}" Height="{DynamicResource StudioPlayButtonHeight}" Margin="8,0" FontFamily="Segoe Fluent Icons" FontSize="18" Padding="0" ToolTip="Play or pause" />
                 <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekForwardCommand}" ToolTip="{Binding SeekForwardToolTip}" />
             </StackPanel>
             <StackPanel Grid.Column="1" Margin="20,0" VerticalAlignment="Center">
