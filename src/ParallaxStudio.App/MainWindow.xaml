@@ -834,6 +834,28 @@
                                 </Grid>
                             </Border>
 
+                            <TextBlock Text="METADATA &amp; ARTWORK" Style="{StaticResource EyebrowText}" Margin="0,12,0,9" />
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Online posters" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="After local artwork and cache, allow an exact-match TMDB poster lookup." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding OnlineArtworkEnabled, Mode=TwoWay}" AutomationProperties.Name="Enable online artwork"/>
+                                </Grid>
+                            </Border>
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0"><TextBlock Text="Cache downloaded posters" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold"/><TextBlock Text="Keep TMDB posters under Parallax Studio's LocalAppData cache for fast reuse." Style="{StaticResource BodyText}" FontSize="11" Margin="0,5,0,0"/></StackPanel>
+                                    <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" IsChecked="{Binding CacheOnlineArtwork, Mode=TwoWay}" AutomationProperties.Name="Cache online artwork"/>
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Text="CREDITS / TMDB" Style="{StaticResource EyebrowText}" Margin="0,12,0,9" />
+                            <Border Style="{StaticResource SettingsRowBorder}">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding OnlineArtworkStatus}" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap"/>
+                                    <TextBlock Text="This product uses the TMDB API but is not endorsed or certified by TMDB." Style="{StaticResource BodyText}" FontSize="11" TextWrapping="Wrap" Margin="0,7,0,0"/>
+                                </StackPanel>
+                            </Border>
+
                             <TextBlock Text="FULLSCREEN" Style="{StaticResource EyebrowText}" Margin="0,12,0,9" />
                             <Border Style="{StaticResource SettingsRowBorder}">
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>

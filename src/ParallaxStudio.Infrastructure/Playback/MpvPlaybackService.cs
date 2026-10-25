@@ -1419,6 +1419,19 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                     var idle = _library.GetProperty(_context, "idle-active");
                     var mute = _library.GetProperty(_context, "mute");
 
+                    var playbackTitle = Snapshot.Title;
+                    if (Snapshot.Source?.StartsWith(
+                            "Blu-ray disc",
+                            StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        var metadataTitle = _library.GetProperty(
+                            _context,
+                            "metadata/by-key/Title");
+
+                        if (!string.IsNullOrWhiteSpace(metadataTitle))
+                            playbackTitle = metadataTitle.Trim();
+                    }
+
                     _paused = string.Equals(pause, "yes", StringComparison.OrdinalIgnoreCase);
                     var state = Snapshot.State;
                     var dvdTitleTransitionPending = _pendingDvdEditionIndex >= 0;
@@ -1444,6 +1457,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                     var next = Snapshot with
                     {
                         State = state,
+                        Title = playbackTitle,
                         Position = position,
                         Duration = duration,
                         IsMuted = string.Equals(mute, "yes", StringComparison.OrdinalIgnoreCase)

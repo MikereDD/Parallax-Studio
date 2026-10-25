@@ -66,7 +66,12 @@ public sealed class MainViewModel : ObservableObject
     private DateTimeOffset _lastResumePersistUtc = DateTimeOffset.MinValue;
     private bool _hasActiveMedia;
     private readonly LocalArtworkService _artworkService = new();
+    private readonly TmdbArtworkService _tmdbArtworkService = new();
     private CancellationTokenSource? _artworkCancellation;
+    private int _artworkLookupGeneration = -1;
+    private string? _artworkLookupTitle;
+    private TimeSpan _artworkLookupDuration;
+    private long _artworkRequestId;
     private ImageSource? _artwork;
     private string? _presentationSource;
     private int _mediaGeneration;
@@ -454,6 +459,34 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    public bool OnlineArtworkEnabled
+    {
+        get => _settings.OnlineArtworkEnabled;
+        set
+        {
+            if (_settings.OnlineArtworkEnabled == value) return;
+            _settings.OnlineArtworkEnabled = value;
+            OnPropertyChanged();
+            QueueSettingsSave();
+            RestartArtworkLookup();
+        }
+    }
+
+    public bool CacheOnlineArtwork
+    {
+        get => _settings.CacheOnlineArtwork;
+        set
+        {
+            if (_settings.CacheOnlineArtwork == value) return;
+            _settings.CacheOnlineArtwork = value;
+            OnPropertyChanged();
+            QueueSettingsSave();
+            RestartArtworkLookup();
+        }
+    }
+
+    public string OnlineArtworkStatus => _tmdbArtworkService.ConfigurationStatus;
+
     public bool ResumePlayback
     {
         get => _settings.ResumePlayback;
@@ -522,6 +555,9 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(RememberWindowGeometry));
         OnPropertyChanged(nameof(ReduceMotion));
         OnPropertyChanged(nameof(InterfaceDensity));
+        OnPropertyChanged(nameof(OnlineArtworkEnabled));
+        OnPropertyChanged(nameof(CacheOnlineArtwork));
+        OnPropertyChanged(nameof(OnlineArtworkStatus));
         OnPropertyChanged(nameof(ResumePlayback));
         OnPropertyChanged(nameof(SeekStepSeconds));
         OnPropertyChanged(nameof(SeekBackToolTip));
@@ -1498,6 +1534,43 @@ public sealed class MainViewModel : ObservableObject
             HasActiveMedia = snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused;
             NowPlayingTitle = HasActiveMedia ? snapshot.Title : "Nothing playing";
             SourceText = HasActiveMedia ? MediaPresentation.SourceSummary(snapshot.Source) : "Open a video to begin";
+            var artworkSourceIsOptical = MediaPresentation.SourceKind(snapshot.Source) is "Blu-ray" or "DVD";
+            var artworkIdentityChanged =
+                _artworkLookupGeneration != _mediaGeneration ||
+                !string.Equals(
+                    _artworkLookupTitle,
+                    snapshot.Title,
+                    StringComparison.Ordinal) ||
+                (artworkSourceIsOptical &&
+                 _artworkLookupDuration <= TimeSpan.Zero &&
+                 snapshot.Duration > TimeSpan.Zero);
+
+            if (HasActiveMedia && artworkIdentityChanged)
+            {
+                // Optical metadata can refine the provisional disc label after load.
+                // Restart artwork once when the authoritative title changes.
+                if (_artworkLookupGeneration == _mediaGeneration)
+                {
+                    _artworkCancellation?.Cancel();
+                    _artworkCancellation?.Dispose();
+                    _artworkCancellation = new CancellationTokenSource();
+                    Artwork = null;
+                }
+
+                _artworkCancellation ??= new CancellationTokenSource();
+                _artworkLookupGeneration = _mediaGeneration;
+                _artworkLookupTitle = snapshot.Title;
+                _artworkLookupDuration = snapshot.Duration;
+                var artworkRequestId = ++_artworkRequestId;
+
+                _ = LoadArtworkAsync(
+                    snapshot.Source,
+                    snapshot.Title,
+                    snapshot.Duration,
+                    _mediaGeneration,
+                    artworkRequestId,
+                    _artworkCancellation.Token);
+            }
             if (!HasActiveMedia)
             {
                 if (MediaDetails.Count > 0 || Artwork is not null || _presentationTracks.Count > 0)
@@ -1682,23 +1755,81 @@ public sealed class MainViewModel : ObservableObject
         _artworkCancellation?.Cancel();
         _artworkCancellation?.Dispose();
         _artworkCancellation = new CancellationTokenSource();
+        _artworkLookupGeneration = -1;
+        _artworkLookupTitle = null;
+        _artworkLookupDuration = TimeSpan.Zero;
+        _artworkRequestId++;
         Artwork = null;
-        // Only file paths enter artwork lookup. Reading a physical disc for artwork
-        // during playback could contend with libbluray/libdvdnav.
-        if (MediaPresentation.SourceKind(source) == "Local file")
-            _ = LoadArtworkAsync(source, _mediaGeneration, _artworkCancellation.Token);
     }
 
-    private async Task LoadArtworkAsync(string? source, int generation, CancellationToken cancellationToken)
+    private void RestartArtworkLookup()
+    {
+        if (!HasActiveMedia) return;
+
+        _artworkCancellation?.Cancel();
+        _artworkCancellation?.Dispose();
+        _artworkCancellation = new CancellationTokenSource();
+        Artwork = null;
+
+        var snapshot = _playback.Snapshot;
+        _artworkLookupGeneration = _mediaGeneration;
+        _artworkLookupTitle = snapshot.Title;
+        _artworkLookupDuration = snapshot.Duration;
+        var artworkRequestId = ++_artworkRequestId;
+        _ = LoadArtworkAsync(
+            snapshot.Source,
+            snapshot.Title,
+            snapshot.Duration,
+            _mediaGeneration,
+            artworkRequestId,
+            _artworkCancellation.Token);
+    }
+
+    private async Task LoadArtworkAsync(
+        string? source,
+        string? title,
+        TimeSpan playbackDuration,
+        int generation,
+        long artworkRequestId,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var artwork = await _artworkService.LoadAsync(source, cancellationToken);
-            if (!_shutdown && !cancellationToken.IsCancellationRequested && generation == _mediaGeneration)
+            ImageSource? artwork = null;
+
+            // Never crawl a physical optical disc for art. Local files keep the v3
+            // same-basename/poster/folder/cover priority before any network lookup.
+            if (MediaPresentation.SourceKind(source) == "Local file")
+                artwork = await _artworkService.LoadAsync(source, cancellationToken);
+
+            if (artwork is null)
+            {
+                var sourceKind = MediaPresentation.SourceKind(source);
+                TimeSpan? tmdbDuration =
+                    (sourceKind is "Blu-ray" or "DVD") && playbackDuration > TimeSpan.Zero
+                        ? playbackDuration
+                        : null;
+
+                artwork = await _tmdbArtworkService.LoadAsync(
+                    source,
+                    title,
+                    _settings.OnlineArtworkEnabled,
+                    _settings.CacheOnlineArtwork,
+                    cancellationToken,
+                    tmdbDuration);
+            }
+
+            if (!_shutdown &&
+                !cancellationToken.IsCancellationRequested &&
+                generation == _mediaGeneration &&
+                artworkRequestId == _artworkRequestId &&
+                string.Equals(source, _playback.Snapshot.Source, StringComparison.Ordinal))
+            {
                 Artwork = artwork;
+            }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { await _logger.WarningAsync($"Local artwork could not be loaded: {ex.Message}"); }
+        catch (Exception ex) { await _logger.WarningAsync($"Artwork could not be loaded: {ex.Message}"); }
     }
 
     private void UpdateMediaPresentation(PlaybackSnapshot snapshot)
@@ -1756,7 +1887,7 @@ public sealed class MainViewModel : ObservableObject
 
     private static void CopySettings(AppSettings source, AppSettings destination)
     {
-        destination.SchemaVersion = Math.Max(5, source.SchemaVersion);
+        destination.SchemaVersion = Math.Max(6, source.SchemaVersion);
         destination.Volume = Math.Clamp(source.Volume, 0, 100);
         destination.LastOpenDirectory = source.LastOpenDirectory;
         destination.WindowWidth = source.WindowWidth;
@@ -1769,6 +1900,8 @@ public sealed class MainViewModel : ObservableObject
         destination.TextSize = string.IsNullOrWhiteSpace(source.TextSize) ? "Standard" : source.TextSize;
         destination.ReduceMotion = source.ReduceMotion;
         destination.InterfaceDensity = source.InterfaceDensity == "Compact" ? "Compact" : "Comfortable";
+        destination.OnlineArtworkEnabled = source.OnlineArtworkEnabled;
+        destination.CacheOnlineArtwork = source.CacheOnlineArtwork;
         destination.CinemaAutoExpand = source.CinemaAutoExpand;
         destination.RestoreSidebarWhenPlaybackStops = source.RestoreSidebarWhenPlaybackStops;
         destination.ShowSidebarWhenPaused = source.ShowSidebarWhenPaused;

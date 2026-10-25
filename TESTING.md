@@ -156,3 +156,38 @@ Then run these checks in the application with native dependencies staged:
 Automated presentation checks and successful builds do not establish physical
 disc compatibility. Protected Blu-ray playback, DVD isolation/title mapping,
 disc changes, and fullscreen video still require the hardware regressions above.
+
+## TMDB artwork validation
+
+Run the deterministic TMDB resolver checks without a live API token:
+
+```powershell
+.\scripts\Test-TmdbArtwork.ps1
+.\scripts\Test-TmdbArtwork.ps1 -Configuration Release
+```
+
+The checks cover disabled online artwork, missing credentials, cache hits, exact
+title/year matching, ambiguous-title refusal, network failure, corrupt and
+oversized poster responses, cancellation, and optical cache identity.
+
+For live validation, set a TMDB API Read Access Token in
+`PARALLAX_TMDB_TOKEN`, fully relaunch Parallax Studio, and verify:
+
+1. A local movie with no sidecar artwork uses the built-in fallback immediately
+   and then replaces it asynchronously with the TMDB poster.
+2. Same-basename or `poster`/`folder`/`cover` local artwork still wins over cache
+   and TMDB.
+3. `Blade Runner 2049 [2017]` resolves by exact title and bracketed year.
+4. A `They Live` Blu-ray can receive a poster without reading artwork from the
+   physical disc; eject/reinsert should reuse the Parallax-owned cache.
+5. Moving the same optical title between drive letters does not split its poster
+   cache identity.
+6. An ambiguous title-only query is refused instead of showing a guessed poster.
+7. Disable **Online posters** and confirm no TMDB artwork is shown or requested.
+8. Disable **Cache downloaded posters** and confirm live lookup still works but
+   no new cache file is retained.
+9. Rapidly switch sources while a lookup is in flight; the existing media
+   generation guard must prevent the prior result from replacing the newer
+   source's artwork.
+10. Re-run protected Blu-ray, isolated DVD, local playback, fullscreen, density,
+    and reduced-motion regressions. The TMDB service must not alter playback.
