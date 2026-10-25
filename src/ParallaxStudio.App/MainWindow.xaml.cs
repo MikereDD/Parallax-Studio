@@ -38,6 +38,7 @@ public partial class MainWindow : Window
         DataContext = viewModel;
         _viewModel.ToggleFullscreenRequested += OnToggleFullscreenRequested;
         _viewModel.CinemaSettingsChanged += OnCinemaSettingsChanged;
+        _viewModel.MediaPresentationChanged += OnMediaPresentationChanged;
         _fullscreenUiTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(120)
@@ -56,8 +57,27 @@ public partial class MainWindow : Window
         RestoreWindowGeometry();
     }
 
-    private async void VideoHost_HandleCreated(object? sender, VideoHandleCreatedEventArgs e) =>
+    private async void VideoHost_HandleCreated(object? sender, VideoHandleCreatedEventArgs e)
+    {
         await _viewModel.AttachVideoAsync(e.Handle);
+        UpdateVideoSurfaceVisibility();
+    }
+
+    private void OnMediaPresentationChanged(object? sender, EventArgs e) =>
+        UpdateVideoSurfaceVisibility();
+
+    private void UpdateVideoSurfaceVisibility()
+    {
+        VideoHost.Visibility = _viewModel.HasActiveMedia
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void VideoHost_DoubleClicked(object? sender, EventArgs e)
+    {
+        if (_viewModel.DoubleClickFullscreen)
+            _viewModel.ToggleFullscreenCommand.Execute(null);
+    }
 
     private void RestoreWindowGeometry()
     {
@@ -98,6 +118,7 @@ public partial class MainWindow : Window
         }
         _viewModel.ToggleFullscreenRequested -= OnToggleFullscreenRequested;
         _viewModel.CinemaSettingsChanged -= OnCinemaSettingsChanged;
+        _viewModel.MediaPresentationChanged -= OnMediaPresentationChanged;
 
         if (_viewModel.RememberWindowGeometry)
         {
@@ -198,7 +219,7 @@ public partial class MainWindow : Window
             VideoBorder.InvalidateArrange();
             UpdateLayout();
 
-            VideoHost.Visibility = Visibility.Visible;
+            UpdateVideoSurfaceVisibility();
             VideoHost.InvalidateMeasure();
             VideoHost.InvalidateArrange();
             UpdateLayout();

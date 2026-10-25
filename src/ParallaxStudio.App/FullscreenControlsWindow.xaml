@@ -15,9 +15,9 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekBackCommand}" ToolTip="Back 5 seconds" />
+                <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekBackCommand}" ToolTip="{Binding SeekBackToolTip}" />
                 <Button Content="{Binding PlayPauseGlyph}" Style="{StaticResource PrimaryButton}" Command="{Binding PlayPauseCommand}" Width="58" Height="44" Margin="8,0" FontFamily="Segoe Fluent Icons" FontSize="18" Padding="0" ToolTip="Play or pause" />
-                <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekForwardCommand}" ToolTip="Forward 5 seconds" />
+                <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekForwardCommand}" ToolTip="{Binding SeekForwardToolTip}" />
             </StackPanel>
             <StackPanel Grid.Column="1" Margin="20,0" VerticalAlignment="Center">
                 <Grid Margin="1,0,1,3">

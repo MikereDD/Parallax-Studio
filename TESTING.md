@@ -76,3 +76,16 @@ used with checksum verification; the dependency manifest was left unchanged.
 Automated offscreen shell checks cover theme switching, minimum/default layout,
 synthetic disc/title/track/chapter states, resource/binding errors, and rendered
 previews. They do not replace the physical Blu-ray/DVD regressions above.
+## Player Experience v2 validation
+
+Validate these cases after applying the Player Experience v2 overlay:
+
+- Launch with no media: the native video HWND is collapsed and the cinematic `PARALLAX / READY` landing state is visible.
+- Open a local video: the landing state disappears, the native video surface appears, and playback remains hardware/native.
+- Media Details shows video codec plus resolution/frame rate when mpv reports them, selected audio plus channel/sample-rate information, subtitle state, source type, duration, and chapter count.
+- Change **Settings → Playback → Seek interval** between 5/10/15/30 seconds; both transport buttons and Left/Right arrow keys use the selected interval immediately.
+- Enable **Resume playback**, play a local file beyond 30 seconds, close/stop Parallax, reopen the same file, and confirm it resumes near the saved position.
+- A resume point within the final minute of a title is discarded so the next open starts fresh.
+- Disable **Remember volume**, restart, and confirm Parallax starts at its neutral 68% level rather than restoring the previous session volume.
+- Enable **Double-click for fullscreen** and confirm a double-click on the native video surface enters/exits fullscreen without interrupting playback.
+- Re-run protected Blu-ray playback, Blu-ray title browsing, DVD isolated playback, DVD title reconciliation, track switching, chapter navigation, Cinema Auto-Expand, and fullscreen auto-hide regressions.

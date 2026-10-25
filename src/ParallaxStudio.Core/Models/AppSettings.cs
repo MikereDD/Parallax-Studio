@@ -2,7 +2,7 @@ namespace ParallaxStudio.Core.Models;
 
 public sealed class AppSettings
 {
-    public int SchemaVersion { get; set; } = 3;
+    public int SchemaVersion { get; set; } = 4;
     public double Volume { get; set; } = 68;
     public string? LastOpenDirectory { get; set; }
     public double WindowWidth { get; set; } = 1380;
@@ -19,6 +19,14 @@ public sealed class AppSettings
     public bool CinemaAutoExpand { get; set; } = true;
     public bool RestoreSidebarWhenPlaybackStops { get; set; } = true;
     public bool ShowSidebarWhenPaused { get; set; }
+
+    // Playback behavior
+    public bool ResumePlayback { get; set; } = true;
+    public int ResumeMinimumSeconds { get; set; } = 30;
+    public int ResumeCompletionThresholdSeconds { get; set; } = 60;
+    public int SeekStepSeconds { get; set; } = 10;
+    public bool RememberVolume { get; set; } = true;
+    public bool DoubleClickFullscreen { get; set; } = true;
 
     // Fullscreen behavior
     public bool FullscreenHideTransport { get; set; } = true;
