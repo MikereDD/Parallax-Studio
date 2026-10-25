@@ -414,7 +414,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 
                 if (!HasDvdPlaybackMapping(_loadedDvdCacheKey, titleIndex))
                 {
-                    throw new InvalidOperationException(
+                    throw new OpticalTitleUnavailableException(
                         $"Parallax could not confidently match DVD metadata title {titleIndex + 1} to a playable DVD title" +
                         $"{DescribeDvdMapOutcome(_loadedDvdCacheKey, titleIndex)}. " +
                         "The title was not started rather than risking playback of the wrong program.");
@@ -837,9 +837,15 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             }
         }
 
-        var mappedText = string.Join(", ", result.Mapping
-            .OrderBy(pair => pair.Key)
-            .Select(pair => $"metadata {pair.Key + 1}->DVD title {pair.Value + 1}"));
+        var mappedText = string.Join(", ", result.Outcomes
+            .Where(outcome => outcome.Kind == DvdTitleMatchKind.Unique)
+            .OrderBy(outcome => outcome.MetadataIndex)
+            .Select(outcome => $"metadata {outcome.MetadataIndex + 1}->DVD title {outcome.Selector + 1}" +
+                (outcome.Basis == DvdTitleMatchBasis.Calibrated ? " (calibrated)" : string.Empty)));
+        if (result.Calibration is not null)
+            await logger.InfoAsync($"DVD title-map calibration: {result.Calibration}.", cancellationToken).ConfigureAwait(false);
+        else if (!string.IsNullOrWhiteSpace(result.CalibrationNote))
+            await logger.InfoAsync($"DVD title-map calibration: {result.CalibrationNote}.", cancellationToken).ConfigureAwait(false);
         await logger.InfoAsync($"Full DVD title map built with {result.Mapping.Count} confident matches: {mappedText}.", cancellationToken).ConfigureAwait(false);
 
         foreach (var outcome in result.Outcomes.Where(outcome => outcome.Kind != DvdTitleMatchKind.Unique))
@@ -968,7 +974,12 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         var actualChapterCount = chapters.Count;
         var selector = _activeDvdPlaybackTitleNumber;
         var cacheKey = _loadedDvdCacheKey;
-        var loaded = DvdTitleMatcher.MatchLoadedTitle(metadataTitles, actualDuration, actualChapterCount);
+        DvdRuntimeCalibration? calibration;
+        lock (_dvdMappingSync)
+        {
+            calibration = _dvdTitleMapResults.TryGetValue(cacheKey, out var mapResult) ? mapResult.Calibration : null;
+        }
+        var loaded = DvdTitleMatcher.MatchLoadedTitle(metadataTitles, actualDuration, actualChapterCount, calibration);
         if (loaded.Kind != DvdTitleMatchKind.Unique || loaded.Title is not { } match)
         {
             // Not evidence either way: keep any mapping the full title map established and

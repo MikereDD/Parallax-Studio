@@ -57,6 +57,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly RelayCommand _cancelBluRayTitleDiscoveryCommand;
     private bool _dvdReconciliationUiRefreshPending;
     private string _lastDvdReconciliationUiSource = string.Empty;
+    private string? _lastTitleUnavailableMessage;
     private readonly SemaphoreSlim _settingsSaveGate = new(1, 1);
     private bool _isSettingsPanelOpen;
     private bool _isCinemaSidebarHidden;
@@ -1058,6 +1059,18 @@ public sealed class MainViewModel : ObservableObject
                 : _activeDisc.Kind == DiscKind.Dvd && activeTitle is not null && activeTitle.Index != title.Index
                     ? $"DVD playback matched the loaded program to title {activeTitle.DisplayNumber} at {activeTitle.DurationText} using runtime and chapter data."
                     : $"{_activeDisc.KindLabel} title {(activeTitle?.DisplayNumber ?? title.DisplayNumber)} is playing. Tracks, subtitles, chapters, duration, and timeline were refreshed.";
+        }
+        catch (OpticalTitleUnavailableException ex)
+        {
+            // An explained refusal (for example an ambiguous DVD title map), not a playback
+            // failure: show the reason, keep current playback, and log it once per message.
+            StatusText = $"{_activeDisc.KindLabel} title {title.DisplayNumber} was not started. {ex.Message}";
+            BluRayTitleSummary = StatusText;
+            if (!string.Equals(_lastTitleUnavailableMessage, ex.Message, StringComparison.Ordinal))
+            {
+                _lastTitleUnavailableMessage = ex.Message;
+                await _logger.WarningAsync(StatusText);
+            }
         }
         catch (Exception ex)
         {

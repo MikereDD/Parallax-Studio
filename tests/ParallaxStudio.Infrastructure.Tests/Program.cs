@@ -619,6 +619,8 @@ internal sealed partial class TestLogger : IAppLogger
 
     public bool Contains(string text) => _entries.Any(entry => entry.Message.Contains(text, StringComparison.Ordinal));
 
+    public int Count(string text) => _entries.Count(entry => entry.Message.Contains(text, StringComparison.Ordinal));
+
     public IReadOnlyList<string> Errors() => _entries.Where(entry => entry.Level == "ERROR").Select(entry => entry.Message).ToArray();
 
     public IReadOnlyList<int> StubPids() => _entries

@@ -49,15 +49,20 @@ DVD authoring is inconsistent. MakeMKV discovery indices and libdvdnav `dvd://N`
 
 Parallax Studio therefore does not permanently assume that metadata title N equals DVD program N. v1.0-dev.5.5.5 reads the libdvdnav edition table and compares actual program runtimes against MakeMKV discovery metadata. Confident matches form a per-disc title map. Unknown/ambiguous selections are rejected rather than silently loading a different program.
 
-A match is accepted only when it is unique in both directions within a 15-second runtime window (`DvdTitleMatcher.RuntimeWindow`). The metadata title must have exactly one DVD title within the window, and that DVD title must have exactly one metadata title within it. The two tools report the same program a few seconds apart; the regression disc shows 6–7 s. As a result, the closest candidate is not evidence when two titles are within the window of each other, and title or selector order is never used to break a tie. Titles that fail this test are logged as `not mapped (ambiguous)` or `not mapped (unmatched)` with the competing or nearest titles, and they are refused for direct playback.
+A match is accepted only when it is the only consistent candidate in both directions: the metadata title has exactly one consistent DVD title, and that DVD title has exactly one consistent metadata title. "Closest" is never evidence. Title or selector order and forced one-to-one elimination are never used to break a tie. Matching runs in two stages:
 
-After a title loads, its runtime and chapter count (±1 chapter) are checked with the same rule:
+1. **Direct.** Runtimes within 15 s (`DvdTitleMatcher.RuntimeWindow`). The unique direct matches become *anchors*.
+2. **Calibrated.** Runs only if titles are still unresolved, and only with at least 3 anchors, 2 of them 10 minutes or longer. Parallax computes the runtime ratios `r` that explain every anchor at once (`dvd = metadata × (1 + r) ± 3 s`). The remaining titles are then judged against the range that ratio predicts for their own length. If no single ratio fits all anchors, calibration is not used.
+
+On the Doctor Who 2018 D13 disc, the discrepancy grows with length: +1 s at 0:24, +5 to +7 s at 42–67 min, and +29 s at 4:00. The fixed window therefore leaves the 41:59 / 41:47 pair ambiguous and the 4-hour aggregate unmatched. The disc's five direct anchors calibrate `r` to about 0.15–0.22 %. That resolves both, and rejects the swapped assignment, which would need −6 s and +17 s offsets.
+
+Titles that remain unresolved are logged as `not mapped (ambiguous)` or `not mapped (unmatched)`, with the competing or nearest titles. Selecting one shows the reason (`OpticalTitleUnavailableException`) instead of a playback error. Calibrated matches are labelled `(calibrated)` in the map log, and the calibration itself is logged.
+
+After a title loads, its runtime (judged against the same calibration when one exists) and chapter count (±1 chapter) are checked with the same rule:
 
 - **Unique and agreeing:** the mapping is verified.
-- **Ambiguous:** the existing mapping is kept and reported as unverified.
-- **Unique but disagreeing with the full map:** both claims are withdrawn rather than overwritten, and logged as a reconciliation conflict.
-
-The `DVD title-map inputs` log line records every runtime used, for tuning against real discs.
+- **Ambiguous:** the existing mapping is kept, unverified.
+- **Unique but disagreeing:** both claims are withdrawn, and logged as a reconciliation conflict.
 
 Future work will persist verified mappings between sessions and add optional metadata enrichment for discs that do not contain useful title names.
 

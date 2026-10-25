@@ -1,6 +1,8 @@
 ## Unreleased
 
 - DVD title mapping now accepts a match only when it is unique in both directions within a 15 s runtime window; near-equal or competing titles are refused with an explicit ambiguity reason instead of being assigned by closest delta or index order
+- DVD titles left unresolved by the fixed window are matched against a per-disc runtime calibration measured from the uniquely matched titles (proportional model, ±3 s); restores 8/8 titles on Doctor Who 2018 D13 (41:59/41:47 pair and the 3:59:43 aggregate) without widening the fixed window
+- refused DVD titles raise `OpticalTitleUnavailableException`; the title browser shows the reason and logs it once instead of reporting a playback error
 - post-load DVD reconciliation no longer overwrites a mapping: ambiguous evidence keeps it unverified, and conflicting evidence withdraws both claims
 - fixes DVD host teardown throwing `ObjectDisposedException` on every title switch or source change after DVD playback
 - bounds every DVD host IPC request, the per-session I/O gate wait, graceful shutdown, exit wait, and termination; a hung host is now reported as faulted and terminated instead of hanging playback controls and application exit

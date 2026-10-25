@@ -1,5 +1,6 @@
 using ParallaxStudio.Core.Enums;
 using ParallaxStudio.Core.Models;
+using ParallaxStudio.Core.Services;
 using ParallaxStudio.Infrastructure.Playback;
 
 namespace ParallaxStudio.Infrastructure.Tests;
@@ -33,7 +34,19 @@ internal static partial class Program
         ("service: verified reconciliation preserves metadata 6 -> DVD title 8", ServiceReconciliationPreservesNonsequentialMappingAsync),
         ("service: ambiguous title is refused with an explicit reason", ServiceAmbiguousTitleRefusedAsync),
         ("service: ambiguous post-load evidence keeps the full-map mapping", ServiceAmbiguousLoadKeepsMappingAsync),
-        ("service: conflicting post-load evidence withdraws the mapping", ServiceConflictWithdrawsMappingAsync)
+        ("service: conflicting post-load evidence withdraws the mapping", ServiceConflictWithdrawsMappingAsync),
+        ("d13: all eight titles map to the observed DVD titles", Sync(D13MapsAllEightTitles)),
+        ("d13: titles 3/4 and the aggregate title 5 are resolved by disc calibration, and labelled so", Sync(D13CalibratedTitlesAreLabelled)),
+        ("d13: competing assignment 3->4 / 4->3 is outside the calibrated ranges", Sync(D13SwappedAssignmentIsInconsistent)),
+        ("d13: without calibration anchors, 3/4 stay ambiguous and 5 stays unmatched", Sync(D13WithoutAnchorsStaysUncertain)),
+        ("d13: elimination alone does not resolve titles 3 and 4", Sync(D13EliminationIsNotEvidence)),
+        ("d13: inconsistent anchors disable calibration", Sync(D13InconsistentAnchorsDisableCalibration)),
+        ("d13: an extra DVD title inside a calibrated range keeps the title ambiguous", Sync(D13ExtraCandidateStaysAmbiguous)),
+        ("d13: outcome is identical for every input order", Sync(D13IsOrderIndependent)),
+        ("d13: loaded DVD title 4 verifies metadata 4 only with calibration", Sync(D13LoadedTitle4NeedsCalibration)),
+        ("d13: loaded aggregate title verifies metadata 5 with calibration and chapters", Sync(D13LoadedAggregate)),
+        ("service: d13 plays and verifies all eight titles, including metadata 6 -> DVD title 8", ServiceD13PlaysAllTitlesAsync),
+        ("service: refusal is an OpticalTitleUnavailableException", ServiceRefusalTypeAsync)
     ];
 
     private static Func<Task> Sync(Action action) => () =>
@@ -44,8 +57,9 @@ internal static partial class Program
 
     // ----- full map -------------------------------------------------------------------
 
-    // Shaped like the regression disc: eight MakeMKV titles, libdvdnav selectors in a
-    // different order, libdvdnav runtimes 6–7 s longer. Metadata title 6 is DVD title 8.
+    // Synthetic disc: eight MakeMKV titles, libdvdnav selectors in a different order,
+    // libdvdnav runtimes 6–7 s longer. Every title is directly unique. (The exact D13
+    // runtimes observed on NETZACH are in D13Metadata/D13Editions below.)
     private static readonly BluRayTitle[] RegressionMetadata =
     [
         Meta(0, "1:07:26", 9), Meta(1, "0:49:10", 7), Meta(2, "0:50:02", 7), Meta(3, "0:46:51", 6),
@@ -311,6 +325,175 @@ internal static partial class Program
 
         var refusal = await CaptureAsync<InvalidOperationException>(() => service.OpenDvdTitleAsync(Disc, 4));
         Check(refusal.Message.Contains("withdrawn"), "The refusal must explain the withdrawn mapping: " + refusal.Message);
+    }
+
+    // ----- D13 (exact runtimes from the NETZACH log, 2026-10-25 15:35 and 15:39) --------
+
+    private static readonly BluRayTitle[] D13Metadata =
+    [
+        Meta(0, "1:07:26", 13), Meta(1, "0:43:55", 13), Meta(2, "0:41:59", 13), Meta(3, "0:41:47", 13),
+        Meta(4, "3:59:43", 61), Meta(5, "0:44:36", 13), Meta(6, "0:00:24", 3), Meta(7, "0:01:35", 3)
+    ];
+
+    // DVD titles 1–20 (selectors 0–19), including the twelve zero-length titles.
+    private static readonly DvdEditionInfo[] D13Editions = new[]
+    {
+        "1:07:32", "0:44:00", "0:42:04", "0:41:53", "4:00:12", "0:00:00", "0:00:00", "0:44:43", "0:00:25", "0:00:00",
+        "0:00:00", "0:00:00", "0:00:00", "0:00:00", "0:00:00", "0:00:00", "0:00:00", "0:00:00", "0:01:36", "0:00:00"
+    }.Select((duration, selector) => Edition(selector, duration)).ToArray();
+
+    // Metadata index -> DVD selector. 1/2/6/7/8 were matched on the baseline and are
+    // confirmed by playback logs; 3 -> DVD title 3 is confirmed by the 14:18 playback log
+    // (selector 2 loaded 42:04 / 13 chapters).
+    private static readonly Dictionary<int, int> D13Truth = new()
+    {
+        [0] = 0, [1] = 1, [2] = 2, [3] = 3, [4] = 4, [5] = 7, [6] = 8, [7] = 18
+    };
+
+    private static void D13MapsAllEightTitles()
+    {
+        var result = DvdTitleMatcher.BuildFullMap(D13Metadata, D13Editions);
+        Check(SameMap(result.Mapping, D13Truth), "D13 must map 8/8: " + Describe(result));
+        Check(result.Mapping[5] == 7, "Metadata title 6 must stay DVD title 8");
+        Check(result.Calibration is not null, "D13 has enough consistent anchors to calibrate");
+    }
+
+    private static void D13CalibratedTitlesAreLabelled()
+    {
+        var result = DvdTitleMatcher.BuildFullMap(D13Metadata, D13Editions);
+        var calibrated = result.Outcomes.Where(outcome => outcome.Basis == DvdTitleMatchBasis.Calibrated).Select(outcome => outcome.MetadataIndex).OrderBy(index => index);
+        Check(calibrated.SequenceEqual(new[] { 2, 3, 4 }), "Only titles 3, 4 and 5 need calibration: " + string.Join(",", calibrated));
+        Check(result.Calibration!.AnchorMetadataIndexes.SequenceEqual(new[] { 0, 1, 5, 6, 7 }), "Anchors are the five direct matches");
+        Check(result.OutcomeFor(4)!.Reason.Contains("disc-calibrated range"), "The aggregate match must say what evidence it rests on");
+    }
+
+    private static void D13SwappedAssignmentIsInconsistent()
+    {
+        // The only competing one-to-one assignment within 15 s is 3->DVD 4, 4->DVD 3.
+        // It requires -6 s and +17 s offsets; the disc's own titles show +5..+7 s at this length.
+        var calibration = DvdTitleMatcher.BuildFullMap(D13Metadata, D13Editions).Calibration!;
+        Check(calibration.IsConsistent(Duration("0:41:59"), Duration("0:42:04")), "3 -> DVD 3 is consistent");
+        Check(calibration.IsConsistent(Duration("0:41:47"), Duration("0:41:53")), "4 -> DVD 4 is consistent");
+        Check(!calibration.IsConsistent(Duration("0:41:59"), Duration("0:41:53")), "3 -> DVD 4 (-6 s) is not");
+        Check(!calibration.IsConsistent(Duration("0:41:47"), Duration("0:42:04")), "4 -> DVD 3 (+17 s) is not");
+        Check(calibration.IsConsistent(Duration("3:59:43"), Duration("4:00:12")), "5 -> DVD 5 (+29 s at 4 h) is consistent");
+    }
+
+    private static void D13WithoutAnchorsStaysUncertain()
+    {
+        var result = DvdTitleMatcher.BuildFullMap(
+            D13Metadata.Where(title => title.Index is 2 or 3 or 4).ToArray(),
+            D13Editions);
+        Check(result.Mapping.Count == 0 && result.Calibration is null, "No anchors, no calibration, no mapping: " + Describe(result));
+        Check(result.OutcomeFor(2)!.Kind == DvdTitleMatchKind.Ambiguous && result.OutcomeFor(3)!.Kind == DvdTitleMatchKind.Ambiguous,
+            "Titles 3 and 4 must stay ambiguous");
+        Check(result.OutcomeFor(4)!.Kind == DvdTitleMatchKind.Unmatched, "Title 5 must stay unmatched under the fixed window");
+        Check(result.CalibrationNote?.Contains("no disc calibration") == true, "The missing calibration must be explained");
+    }
+
+    private static void D13EliminationIsNotEvidence()
+    {
+        // Within 15 s, title 4 only fits DVD 4, so "elimination" would force 3 -> DVD 3. That
+        // assumes title 4 really is on the DVD; it is not used as proof. With just two
+        // anchors (one long) there is no calibration, so both stay ambiguous.
+        var result = DvdTitleMatcher.BuildFullMap(
+            D13Metadata.Where(title => title.Index is 0 or 2 or 3 or 6).ToArray(),
+            D13Editions);
+        Check(result.Calibration is null, "Two anchors with one long title must not calibrate");
+        Check(!result.Mapping.ContainsKey(2) && !result.Mapping.ContainsKey(3), "3 and 4 must not be resolved by elimination: " + Describe(result));
+    }
+
+    private static void D13InconsistentAnchorsDisableCalibration()
+    {
+        // Make metadata 2's DVD title 14 s longer: still a direct match, but its ratio
+        // (0.42–0.65 %) no longer agrees with metadata 1 (0.07–0.22 %).
+        var editions = D13Editions.Select(edition => edition.Selector == 1 ? Edition(1, "0:44:09") : edition).ToArray();
+        var result = DvdTitleMatcher.BuildFullMap(D13Metadata, editions);
+        Check(result.Calibration is null && result.CalibrationNote?.Contains("disagree") == true, "Disagreeing anchors must disable calibration: " + result.CalibrationNote);
+        Check(!result.Mapping.ContainsKey(2) && !result.Mapping.ContainsKey(3) && !result.Mapping.ContainsKey(4),
+            "Without calibration, 3/4/5 stay unresolved: " + Describe(result));
+    }
+
+    private static void D13ExtraCandidateStaysAmbiguous()
+    {
+        // A second DVD title at 42:05 lies inside title 3's calibrated range.
+        var editions = D13Editions.Append(Edition(20, "0:42:05")).ToArray();
+        var result = DvdTitleMatcher.BuildFullMap(D13Metadata, editions);
+        Check(result.OutcomeFor(2)!.Kind == DvdTitleMatchKind.Ambiguous && !result.Mapping.ContainsKey(2),
+            "Two DVD titles in the calibrated range must stay ambiguous: " + Describe(result));
+        Check(result.Mapping.TryGetValue(3, out var title4) && title4 == 3, "Title 4 is unaffected");
+    }
+
+    private static void D13IsOrderIndependent()
+    {
+        var expected = Canonical(DvdTitleMatcher.BuildFullMap(D13Metadata, D13Editions));
+        var random = new Random(2018);
+        for (var round = 0; round < 50; round++)
+        {
+            var actual = Canonical(DvdTitleMatcher.BuildFullMap(
+                D13Metadata.OrderBy(_ => random.Next()).ToArray(),
+                D13Editions.OrderBy(_ => random.Next()).ToArray()));
+            Check(actual == expected, $"Round {round}: outcome depends on input order");
+        }
+    }
+
+    private static void D13LoadedTitle4NeedsCalibration()
+    {
+        var calibration = DvdTitleMatcher.BuildFullMap(D13Metadata, D13Editions).Calibration;
+        var without = DvdTitleMatcher.MatchLoadedTitle(D13Metadata, Duration("0:41:53"), 13);
+        var with = DvdTitleMatcher.MatchLoadedTitle(D13Metadata, Duration("0:41:53"), 13, calibration);
+        Check(without.Kind == DvdTitleMatchKind.Ambiguous, "41:53 is 6 s from both 41:59 and 41:47");
+        Check(with.Kind == DvdTitleMatchKind.Unique && with.Title?.Index == 3, $"Calibration must identify metadata 4: {with.Kind}: {with.Reason}");
+    }
+
+    private static void D13LoadedAggregate()
+    {
+        var calibration = DvdTitleMatcher.BuildFullMap(D13Metadata, D13Editions).Calibration;
+        var match = DvdTitleMatcher.MatchLoadedTitle(D13Metadata, Duration("4:00:12"), 61, calibration);
+        Check(match.Kind == DvdTitleMatchKind.Unique && match.Title?.Index == 4, $"The aggregate must verify as metadata 5: {match.Kind}: {match.Reason}");
+        var wrongChapters = DvdTitleMatcher.MatchLoadedTitle(D13Metadata, Duration("4:00:12"), 13, calibration);
+        Check(wrongChapters.Kind == DvdTitleMatchKind.Unmatched, "A 13-chapter program is not the 61-chapter aggregate");
+    }
+
+    private static async Task ServiceD13PlaysAllTitlesAsync()
+    {
+        var log = new TestLogger();
+        await using var service = NewService(log);
+        await service.SeedDvdTitleMapForTestingAsync(Disc, D13Metadata, D13Editions);
+        Check(log.Contains("Full DVD title map built with 8 confident matches"), "The production apply path must map 8/8");
+        Check(log.Contains("metadata 6->DVD title 8,") && log.Contains("metadata 3->DVD title 3 (calibrated)"), "Calibrated matches must be labelled in the log");
+        Check(log.Contains("DVD title-map calibration: DVD runtime = metadata ×"), "The calibration must be logged");
+
+        foreach (var (metadataIndex, selector) in D13Truth.OrderBy(pair => pair.Key))
+        {
+            var title = D13Metadata.Single(item => item.Index == metadataIndex);
+            var edition = D13Editions.Single(item => item.Selector == selector);
+            UseLoadedTitle(edition.Duration.ToString("c", System.Globalization.CultureInfo.InvariantCulture), title.ChapterCount);
+            var reconciledBefore = log.Count("DVD title reconciled");
+            await service.OpenDvdTitleAsync(Disc, metadataIndex);
+            var pid = log.StubPids().Last();
+            Check(log.Contains($"STUB_TITLE {pid} {selector}"), $"Metadata {metadataIndex + 1} must start DVD selector {selector}");
+            await WaitUntilAsync(() => log.Count("DVD title reconciled") > reconciledBefore, TimeSpan.FromSeconds(4), $"metadata {metadataIndex + 1} to verify");
+            Check(log.Contains($"matched metadata title {metadataIndex + 1} ("), $"Metadata {metadataIndex + 1} must verify as itself");
+        }
+
+        Check(SameMap(service.GetDvdTitleMapForTesting(Disc), D13Truth), "Verification must leave the map unchanged");
+        Check(!log.Contains("could not verify") && !log.Contains("reconciliation conflict"), "No title may be unverified or conflicting");
+        log.AssertNoErrors();
+    }
+
+    private static async Task ServiceRefusalTypeAsync()
+    {
+        var log = new TestLogger();
+        await using var service = NewService(log);
+        await service.SeedDvdTitleMapForTestingAsync(
+            Disc,
+            D13Metadata.Where(title => title.Index is 2 or 3).ToArray(),
+            D13Editions);
+        UseStub("normal");
+        var refusal = await CaptureAsync<OpticalTitleUnavailableException>(() => service.OpenDvdTitleAsync(Disc, 2));
+        Check(refusal.Message.Contains("ambiguous"), "The refusal must carry the reason: " + refusal.Message);
+        Check(log.StubPids().Count == 0, "No host may start for a refused title");
     }
 
     // ----- helpers ----------------------------------------------------------------------
