@@ -12,7 +12,7 @@
 1. Insert a known protected Blu-ray.
 2. Confirm the disc is detected automatically.
 3. Play the main feature and confirm video/audio load without an AACS failure.
-4. Browse titles and confirm discovery does not interrupt currently playing content.
+4. Reopen an already populated title browser and confirm cached metadata appears immediately. For a fresh uncached scan, confirm Parallax stops optical playback first to avoid drive contention, then discovers titles without starting one automatically.
 5. Switch to a bonus title and verify tracks, subtitles, chapters, seeking, and fullscreen.
 
 ## DVD full-title-map validation
@@ -41,10 +41,10 @@ dotnet build .\ParallaxStudio.sln -c Debug
 dotnet build .\ParallaxStudio.sln -c Release
 ```
 
-The native inputs required by the DVD helper projects must be staged first. The
-manifest's libmpv `20260421` upstream release is currently unavailable (404).
-For this shell's local validation, the official `20261021-git-e471496c56` build was
-used with checksum verification; the dependency manifest was left unchanged.
+Stage native playback dependencies before testing actual playback. The current
+manifest pins libmpv `20261021-git-e471496c56` and its archive SHA-256. Use the
+normal bootstrap and `scripts/Verify-NativeDependencies.ps1` to validate the
+staged files; no alternate package or manual manifest override is needed.
 
 1. At 1380×860 and 1020×680, cycle through OLED Black, Dark Monochrome, Graphite,
    Midnight Indigo, Aurora Pulse, and Obsidian Gold, then cycle back. Check the
@@ -78,7 +78,7 @@ synthetic disc/title/track/chapter states, resource/binding errors, and rendered
 previews. They do not replace the physical Blu-ray/DVD regressions above.
 ## Player Experience v2 validation
 
-Validate these cases after applying the Player Experience v2 overlay:
+Validate these cases in the current player:
 
 - Launch with no media: the native video HWND is collapsed and the cinematic `PARALLAX / READY` landing state is visible.
 - Open a local video: the landing state disappears, the native video surface appears, and playback remains hardware/native.
@@ -89,3 +89,70 @@ Validate these cases after applying the Player Experience v2 overlay:
 - Disable **Remember volume**, restart, and confirm Parallax starts at its neutral 68% level rather than restoring the previous session volume.
 - Enable **Double-click for fullscreen** and confirm a double-click on the native video surface enters/exits fullscreen without interrupting playback.
 - Re-run protected Blu-ray playback, Blu-ray title browsing, DVD isolated playback, DVD title reconciliation, track switching, chapter navigation, Cinema Auto-Expand, and fullscreen auto-hide regressions.
+
+## Polish and intelligence v3 validation
+
+Run the automated presentation checks from the repository root on Windows with
+the .NET 10 SDK. The checks use generated image fixtures and synthetic metadata;
+they do not require a media file, optical drive, protected disc, or a running mpv
+playback session.
+
+```powershell
+.\scripts\Test-Presentation.ps1
+.\scripts\Test-Presentation.ps1 -Configuration Release
+dotnet build .\ParallaxStudio.sln -c Debug
+dotnet build .\ParallaxStudio.sln -c Release
+```
+
+Then run these checks in the application with native dependencies staged:
+
+1. **Now Playing and progress:** launch idle, open a local video, pause, seek,
+   resume, stop, and reach the end. Check title hierarchy, PLAYING/PAUSED/loading
+   state, elapsed/total time, remaining time, and the compact progress strip.
+   An unknown runtime must show a loading placeholder and zero progress rather
+   than a fabricated duration or a divide-by-zero value. Long titles must remain
+   readable without pushing actions outside the card.
+2. **Artwork order and fallback:** place distinctly identifiable images beside
+   a video. Confirm same-basename art takes priority, then `poster`, then
+   `folder`, then `cover`; each name supports `.jpg`, `.jpeg`, and `.png` in
+   that extension order. Remove each winner and reopen the media to confirm the
+   next candidate. Try corrupt images, an exclusively locked image, absent art,
+   portrait art, and landscape art. Check graceful fallback, correct proportions,
+   and that loaded covers can be replaced or deleted while playback continues.
+3. **Source changes and failed opens:** switch rapidly between local files with
+   different artwork and between a local file and a disc. A late image/metadata
+   result from the previous source must not overwrite the new title. Attempt a
+   file that disappears before opening and a disc/title that cannot be opened.
+   If the prior media remains paused/playing, its presentation must recover;
+   otherwise show the idle/error state without stale art or permanent loading.
+4. **Details and badges:** verify the source/resolution/HDR/audio badges stay
+   compact, and empty Media Details fields disappear. Confirm source labels,
+   optical title numbers, runtime, selected audio/subtitles, and chapter count
+   match playback. Use media whose decoder properties arrive after the first
+   track list: resolution and PQ/HLG badges must update when reported. Do not
+   infer HDR, Atmos, DTS-HD, or other profiles from a filename or generic codec.
+   Unknown fields must remain absent while the loading status explains pending
+   details.
+5. **Optical transitions:** repeat protected Blu-ray playback and the DVD
+   full-title-map checks above. Verify provisional/loading details clear on a
+   title switch and update after runtime reconciliation. The displayed DVD title
+   must retain the verified native program mapping; a UI refresh must not start
+   a new title scan, reload a title, or change the selected playback program.
+   Eject during loading and verify the app remains responsive.
+6. **Appearance and persistence:** change Comfortable/Compact density and reduced
+   motion while idle, playing, and paused. Check sidebar and transport spacing,
+   button/dropdown/slider feedback, keyboard focus, and restart persistence.
+   Reduced motion must affect decorative transitions while retaining clear
+   control feedback. Enter fullscreen and verify floating controls, mouse
+   movement, configured auto-hide timeout, cursor hiding, and Escape behavior
+   continue to work in both densities and motion modes.
+7. **Layout and theme coverage:** test 1380×860 and the 1020×680 minimum, all six
+   themes and three typography profiles, then repeat at 125%, 150%, and 200%
+   display scaling. Check Now Playing, artwork, wrapping badges, scrollable
+   details/settings, and reachable transport actions. The native video surface
+   must stay opaque and unobstructed; its ancestors must not acquire WPF bitmap
+   effects or animated transforms.
+
+Automated presentation checks and successful builds do not establish physical
+disc compatibility. Protected Blu-ray playback, DVD isolation/title mapping,
+disc changes, and fullscreen video still require the hardware regressions above.

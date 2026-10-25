@@ -1,5 +1,38 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+                    xmlns:services="clr-namespace:ParallaxStudio.App.Services">
+    <!-- Comfortable defaults are available before settings load; resources update live. -->
+    <sys:Double x:Key="StudioSidebarWidth">330</sys:Double>
+    <Thickness x:Key="StudioSidebarCardPadding">20</Thickness>
+    <Thickness x:Key="StudioSidebarItemPadding">14,12</Thickness>
+    <Thickness x:Key="StudioTransportPadding">20,16</Thickness>
+    <sys:Double x:Key="StudioIconButtonSize">42</sys:Double>
+    <sys:Double x:Key="StudioPlayButtonWidth">62</sys:Double>
+    <sys:Double x:Key="StudioPlayButtonHeight">48</sys:Double>
+    <Thickness x:Key="StudioTransportStatusMargin">0,14,0,0</Thickness>
+    <Thickness x:Key="StudioFloatingTransportPadding">16,12</Thickness>
+
+    <!-- Reduced motion keeps feedback immediate and removes press scaling/fades. -->
+    <ControlTemplate x:Key="ReducedMotionCommandButtonTemplate" TargetType="Button">
+        <Grid x:Name="ButtonRoot">
+            <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10" />
+            <Border x:Name="HoverWash" Background="{DynamicResource TextBrush}" Opacity="0" CornerRadius="10" IsHitTestVisible="False" />
+            <Border x:Name="FocusRing" BorderBrush="{TemplateBinding Foreground}" BorderThickness="1.5" CornerRadius="7" Margin="3" Opacity="0" IsHitTestVisible="False" />
+            <ContentPresenter Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"
+                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+        </Grid>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" />
+                <Setter TargetName="HoverWash" Property="Opacity" Value="0.08" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="FocusRing" Property="Opacity" Value="1" /></Trigger>
+            <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonRoot" Property="Opacity" Value="0.8" /></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.38" /><Setter Property="Cursor" Value="Arrow" /></Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
     <!-- Derived gradients live in each palette so theme changes replace whole frozen brushes. -->
     <Style TargetType="Window">
         <Setter Property="FontFamily" Value="{DynamicResource StudioFontFamily}" />
@@ -76,7 +109,7 @@
     </Style>
     <Style x:Key="TransportBorder" TargetType="Border" BasedOn="{StaticResource PanelBorder}">
         <Setter Property="CornerRadius" Value="20" />
-        <Setter Property="Padding" Value="20,16" />
+        <Setter Property="Padding" Value="{DynamicResource StudioTransportPadding}" />
     </Style>
     <Style x:Key="BadgeBorder" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource InsetGradientBrush}" />
@@ -188,6 +221,11 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding ReduceMotion, Source={x:Static services:StudioAppearanceService.Motion}}" Value="True">
+                <Setter Property="Template" Value="{StaticResource ReducedMotionCommandButtonTemplate}" />
+            </DataTrigger>
+        </Style.Triggers>
     </Style>
     <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource CommandButton}">
         <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
@@ -195,7 +233,7 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style x:Key="IconButton" TargetType="Button" BasedOn="{StaticResource CommandButton}">
-        <Setter Property="Width" Value="42" /><Setter Property="Height" Value="42" /><Setter Property="MinHeight" Value="0" />
+        <Setter Property="Width" Value="{DynamicResource StudioIconButtonSize}" /><Setter Property="Height" Value="{DynamicResource StudioIconButtonSize}" /><Setter Property="MinHeight" Value="0" />
         <Setter Property="Padding" Value="0" /><Setter Property="FontFamily" Value="Segoe Fluent Icons" /><Setter Property="FontSize" Value="15" />
     </Style>
     <Style x:Key="CaptionButton" TargetType="Button" BasedOn="{StaticResource CommandButton}">
@@ -267,6 +305,7 @@
                         <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="SelectorChrome" Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" /><Setter TargetName="SelectorChrome" Property="Background" Value="{DynamicResource SurfaceHoverBrush}" /></Trigger>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="SelectorChrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" /><Setter TargetName="SelectorChrome" Property="BorderThickness" Value="2" /></Trigger>
                         <Trigger Property="IsDropDownOpen" Value="True"><Setter TargetName="SelectorChrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" /></Trigger>
+                        <DataTrigger Binding="{Binding ReduceMotion, Source={x:Static services:StudioAppearanceService.Motion}}" Value="True"><Setter TargetName="PART_Popup" Property="PopupAnimation" Value="None" /></DataTrigger>
                         <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -295,6 +334,9 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="SliderThumb" Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1.2" ScaleY="1.2" /></Setter.Value></Setter></Trigger>
+                        <DataTrigger Binding="{Binding ReduceMotion, Source={x:Static services:StudioAppearanceService.Motion}}" Value="True">
+                            <Setter TargetName="SliderThumb" Property="RenderTransform"><Setter.Value><ScaleTransform /></Setter.Value></Setter>
+                        </DataTrigger>
                         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="SliderFocus" Property="Opacity" Value="1" /></Trigger>
                         <Trigger Property="IsEnabled" Value="False"><Setter TargetName="SliderRoot" Property="Opacity" Value="0.38" /></Trigger>
                     </ControlTemplate.Triggers>

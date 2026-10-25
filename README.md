@@ -22,23 +22,29 @@
 
 Parallax Studio is a separate modern implementation of the original PowerShell/WinForms **Parallax** player. The classic application remains independent and is not replaced, modified, or used as a runtime dependency.
 
-## Current milestone — v1.0-dev.5.5.5
+## The screening-room experience
 
-The current milestone proves the optical-media architecture end to end:
+Parallax Studio pairs a restrained cinematic shell with native video playback: dark layered surfaces, clear typography, quiet accents, and controls that give the picture room to breathe.
 
-- local video playback through an in-process libmpv engine;
-- protected Blu-ray playback using a locally installed MakeMKV LibMMBD provider when available;
-- MakeMKV-assisted Blu-ray and DVD title discovery;
-- DVD playback inside an isolated playback host so a native DVD failure cannot terminate the WPF application;
-- audio-track, subtitle, chapter, seeking, volume, mute, and fullscreen controls;
-- serialized/cancellable optical-disc discovery and automatic disc-change detection;
-- full-disc DVD title mapping by runtime rather than assuming MakeMKV and libdvdnav title numbers are identical.
+- **Cinema Mode:** Auto-Expand hides the sidebar during playback. Settings control its behavior when paused or stopped, and the sidebar can also be toggled manually.
+- **Fullscreen:** the cinema surface fills the window, with floating controls in a separate owned window above the native video surface. Mouse movement, control timeout, cursor hiding, and Escape behavior are configurable; window bounds and the previous maximized state are restored on exit.
+- **Now Playing v2:** a stronger title hierarchy, local artwork, playback progress, and compact source/video/audio badges. Media Details separates the available stream information from source, runtime, and chapter information, with loading feedback while optical metadata settles.
+- **Local playback:** open or drop a video, then select audio, subtitles, and chapters; load external subtitles and adjust subtitle delay.
+- **Player Experience v2:** a cinematic idle screen, local-file resume, selectable 5/10/15/30-second seek intervals, optional volume persistence, and optional double-click fullscreen. By default, resume starts after 30 seconds of playback and discards positions within the last minute of a title.
+- **Appearance:** six themes—Dark Monochrome, OLED Black, Graphite, Midnight Indigo, Obsidian Gold, and Aurora Pulse—with Cadence, Precision, and Clear typography profiles. Appearance settings include reduced motion and comfortable/compact layout density.
+- **Optical intelligence:** automatic drive/disc-change detection, cancellable title discovery, Blu-ray playback through libmpv/libbluray, and isolated DVD playback with runtime-based title reconciliation.
 
-DVD title names remain dependent on what the disc actually exposes. When a disc contains only structural labels, Parallax can identify programs by runtime/chapter structure but cannot invent authoritative episode names. Metadata enrichment and persistent per-disc mappings are planned later.
+The picture remains on a native mpv HWND. The WPF shell and floating fullscreen controls are arranged around that surface; playback is not copied into a WPF bitmap or processed through shell effects.
+
+### Local artwork
+
+Now Playing looks for images beside a local media file, including a same-basename image (for example, `Arrival.mkv` with `Arrival.jpg`) and shared folder art named `poster.jpg`, `folder.jpg`, or `cover.jpg`. Keep artwork beside the media to use it without an online account or metadata service. Missing or unreadable artwork falls back to the built-in presentation.
+
+This pass does not add online poster lookup or extract embedded attachments from media containers. Disc labels, title names, runtime, and stream details still depend on what the disc and playback backend expose; structural disc labels cannot supply authoritative episode names.
 
 ## Requirements
 
-- Windows 10 or Windows 11, x64
+- Windows 10 or Windows 11, x64; the pinned libmpv package targets **x86-64-v3** CPUs
 - .NET 10 SDK
 - 7-Zip for native dependency bootstrap
 - a DVD/Blu-ray optical drive for disc playback
@@ -54,7 +60,7 @@ The normal development command is:
 .\build.ps1 -Bootstrap -InstallBootstrapTools -Run
 ```
 
-The bootstrap reads `native-dependencies.json`, downloads the pinned native packages, verifies them, and stages the required runtime files. Normal builds can then run without re-downloading dependencies.
+The bootstrap reads `native-dependencies.json` and stages the native runtime files. The pinned libmpv archive and libdvdcss package are checked against manifest SHA-256 values before extraction. Installed output hashes are recorded in `native-dependencies.lock.json` and verified by `scripts/Verify-NativeDependencies.ps1`. Optional dependency failures are reported separately from the required libmpv runtime. Normal builds can reuse the staged files without downloading them again.
 
 To build without bootstrapping:
 
@@ -69,6 +75,14 @@ dotnet restore .\ParallaxStudio.sln
 dotnet build .\ParallaxStudio.sln -c Debug
 dotnet run --project .\src\ParallaxStudio.App\ParallaxStudio.App.csproj
 ```
+
+Stage native dependencies before using the direct CLI path; compilation alone does not download the playback engine. To check the staged native files explicitly:
+
+```powershell
+.\scripts\Verify-NativeDependencies.ps1
+```
+
+See [TESTING.md](TESTING.md) for the UI, local playback, protected Blu-ray, and DVD regression checks.
 
 ## Native playback dependencies
 
@@ -109,9 +123,26 @@ Blu-ray playback uses libmpv/libbluray. Parallax can browse titles, identify lik
 
 DVD playback uses libmpv/libdvdnav with pinned `libdvdcss-2.dll` support for CSS-protected media. DVD playback is intentionally isolated in `ParallaxStudio.DvdPlaybackHost.exe` and controlled from the main application through a private named pipe. This process boundary prevents a native DVD backend failure from taking down the Parallax Studio UI.
 
-MakeMKV and libdvdnav do not always number DVD titles the same way. v1.0-dev.5.5.5 therefore probes the full libdvdnav edition table and maps discovered MakeMKV entries by runtime. Uncertain entries are rejected instead of silently playing the wrong program.
+MakeMKV and libdvdnav do not always number DVD titles the same way. Parallax probes the full libdvdnav edition table and maps discovered MakeMKV entries by runtime. Uncertain entries are rejected instead of silently playing the wrong program. Title discovery and reconciliation may take several seconds; the shell keeps source/title context visible while navigation and stream metadata become available.
 
 Interactive DVD menus are not yet implemented.
+
+### Disc detection and navigation
+
+Ready Blu-ray and DVD sources appear automatically as drives change. Scans are serialized, and title discovery can be cancelled. The title browser presents disc-provided names, runtime, chapter counts, and likely main/bonus classifications where available. Opening an already populated browser reuses cached title metadata. An uncached title scan stops active optical playback first to avoid competing for the physical drive; selecting a title uses the existing Blu-ray or isolated DVD playback path.
+
+## Keyboard controls
+
+| Key | Action |
+|---|---|
+| Space | Play/pause |
+| Left / Right | Seek by the configured interval |
+| Up / Down | Change volume by 5% |
+| M | Mute/unmute |
+| F | Toggle fullscreen |
+| Escape | Leave fullscreen, when enabled in Settings |
+
+Selectors, text fields, toggles, and sliders retain their own keyboard navigation.
 
 ## Branding
 
@@ -159,6 +190,6 @@ Parallax Studio is an independent Typezer∅ Studio application. It does not sha
 
 ## Development direction
 
-The immediate optical-media work is to validate the full-disc DVD map against more publishers/discs, persist verified mappings, improve title naming when metadata is sparse, and continue hardening disc ejection/title switching. The broader roadmap then returns to resume/session reliability, fullscreen polish, packaging, release infrastructure, and the final cinematic Studio presentation.
+The current polish/intelligence pass improves Now Playing, local artwork, metadata presentation, and appearance controls while retaining the established native playback boundaries. Further work includes validating the DVD title map across more publishers/discs, persistent verified mappings, richer metadata where available, packaging, and release infrastructure.
 
 See [ROADMAP.md](ROADMAP.md) for the staged plan and [CHANGELOG.md](CHANGELOG.md) for development history.
