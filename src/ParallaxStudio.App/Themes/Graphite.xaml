@@ -27,4 +27,27 @@
     <SolidColorBrush x:Key="GlowBrush" Color="{StaticResource GlowColor}" />
     <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
     <SolidColorBrush x:Key="AccentTextBrush" Color="{StaticResource AccentTextColor}" />
+    <!-- Replace derived brushes with the palette, keeping all gradient stops in sync. -->
+    <LinearGradientBrush x:Key="ShellBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="{StaticResource SurfaceColor}" Offset="0" />
+        <GradientStop Color="{StaticResource WindowColor}" Offset="0.55" />
+        <GradientStop Color="{StaticResource WindowColor}" Offset="1" />
+    </LinearGradientBrush>
+    <RadialGradientBrush x:Key="AtmosphereBrush" Center="0.25,0" GradientOrigin="0.25,0" RadiusX="0.8" RadiusY="0.9" Opacity="0.22">
+        <GradientStop Color="{StaticResource GlowColor}" Offset="0" />
+        <GradientStop Color="Transparent" Offset="1" />
+    </RadialGradientBrush>
+    <LinearGradientBrush x:Key="SurfaceGradientBrush" StartPoint="0,0" EndPoint="0.8,1">
+        <GradientStop Color="{StaticResource SurfaceRaisedColor}" Offset="0" />
+        <GradientStop Color="{StaticResource SurfaceColor}" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="InsetGradientBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="{StaticResource SurfaceColor}" Offset="0" />
+        <GradientStop Color="{StaticResource WindowColor}" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="RimBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="{StaticResource BorderStrongColor}" Offset="0" />
+        <GradientStop Color="{StaticResource BorderColor}" Offset="0.45" />
+        <GradientStop Color="{StaticResource BorderColor}" Offset="1" />
+    </LinearGradientBrush>
 </ResourceDictionary>

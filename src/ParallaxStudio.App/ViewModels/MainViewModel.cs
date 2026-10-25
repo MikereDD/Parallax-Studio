@@ -56,6 +56,11 @@ public sealed class MainViewModel : ObservableObject
     private readonly RelayCommand _cancelBluRayTitleDiscoveryCommand;
     private bool _dvdReconciliationUiRefreshPending;
     private string _lastDvdReconciliationUiSource = string.Empty;
+    private readonly SemaphoreSlim _settingsSaveGate = new(1, 1);
+    private bool _isSettingsPanelOpen;
+    private bool _isCinemaSidebarHidden;
+    private PlaybackState _currentPlaybackState = PlaybackState.Stopped;
+    private bool? _sidebarHiddenOverride;
 
     public MainViewModel(
         IPlaybackService playback,
@@ -91,6 +96,8 @@ public sealed class MainViewModel : ObservableObject
         SeekForwardCommand = new AsyncRelayCommand(() => SeekAsync(5));
         ToggleTracksCommand = new AsyncRelayCommand(ToggleTracksAsync);
         ToggleFullscreenCommand = new RelayCommand(ToggleFullscreen);
+        ToggleSettingsCommand = new RelayCommand(ToggleSettingsPanel);
+        ToggleSidebarCommand = new RelayCommand(ToggleSidebarVisibility);
         ToggleMuteCommand = new AsyncRelayCommand(ToggleMuteAsync);
         LoadSubtitleCommand = new AsyncRelayCommand(LoadExternalSubtitleAsync);
         SubtitleDelayBackCommand = new AsyncRelayCommand(() => AdjustSubtitleDelayAsync(-0.1));
@@ -100,6 +107,7 @@ public sealed class MainViewModel : ObservableObject
     }
 
     public event EventHandler? ToggleFullscreenRequested;
+    public event EventHandler? CinemaSettingsChanged;
 
     public string AppTitle => $"{AppIdentity.Name}  v{AppIdentity.Version}";
     public string VersionLabel => $"v{AppIdentity.Version}";
@@ -130,6 +138,7 @@ public sealed class MainViewModel : ObservableObject
     }
     public IReadOnlyList<string> ThemeNames => StudioAppearanceService.Themes;
     public IReadOnlyList<string> TypographyNames => StudioAppearanceService.TypographyProfiles;
+    public IReadOnlyList<int> FullscreenControlTimeoutOptions { get; } = [2, 3, 4, 5, 8];
 
     public ICommand OpenCommand { get; }
     public ICommand ScanDiscsCommand { get; }
@@ -144,6 +153,8 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SeekForwardCommand { get; }
     public ICommand ToggleTracksCommand { get; }
     public ICommand ToggleFullscreenCommand { get; }
+    public ICommand ToggleSettingsCommand { get; }
+    public ICommand ToggleSidebarCommand { get; }
     public ICommand ToggleMuteCommand { get; }
     public ICommand LoadSubtitleCommand { get; }
     public ICommand SubtitleDelayBackCommand { get; }
@@ -245,6 +256,7 @@ public sealed class MainViewModel : ObservableObject
             if (!SetProperty(ref _selectedTheme, value)) return;
             _settings.ThemeName = value;
             StudioAppearanceService.ApplyTheme(value);
+            QueueSettingsSave();
         }
     }
 
@@ -256,6 +268,7 @@ public sealed class MainViewModel : ObservableObject
             if (!SetProperty(ref _selectedTypography, value)) return;
             _settings.TypographyProfile = value;
             StudioAppearanceService.ApplyTypography(value, _settings.TextSize);
+            QueueSettingsSave();
         }
     }
 
@@ -299,6 +312,86 @@ public sealed class MainViewModel : ObservableObject
         private set => SetProperty(ref _isFullscreen, value);
     }
 
+    public bool IsSettingsPanelOpen
+    {
+        get => _isSettingsPanelOpen;
+        set => SetProperty(ref _isSettingsPanelOpen, value);
+    }
+
+    public bool IsCinemaSidebarHidden
+    {
+        get => _isCinemaSidebarHidden;
+        private set => SetProperty(ref _isCinemaSidebarHidden, value);
+    }
+
+    public bool CinemaAutoExpand
+    {
+        get => _settings.CinemaAutoExpand;
+        set => UpdateCinemaSetting(_settings.CinemaAutoExpand, value, v => _settings.CinemaAutoExpand = v, nameof(CinemaAutoExpand), refreshSidebar: true);
+    }
+
+    public bool RestoreSidebarWhenPlaybackStops
+    {
+        get => _settings.RestoreSidebarWhenPlaybackStops;
+        set => UpdateCinemaSetting(_settings.RestoreSidebarWhenPlaybackStops, value, v => _settings.RestoreSidebarWhenPlaybackStops = v, nameof(RestoreSidebarWhenPlaybackStops), refreshSidebar: true);
+    }
+
+    public bool ShowSidebarWhenPaused
+    {
+        get => _settings.ShowSidebarWhenPaused;
+        set => UpdateCinemaSetting(_settings.ShowSidebarWhenPaused, value, v => _settings.ShowSidebarWhenPaused = v, nameof(ShowSidebarWhenPaused), refreshSidebar: true);
+    }
+
+    public bool FullscreenHideTransport
+    {
+        get => _settings.FullscreenHideTransport;
+        set => UpdateCinemaSetting(_settings.FullscreenHideTransport, value, v => _settings.FullscreenHideTransport = v, nameof(FullscreenHideTransport));
+    }
+
+    public bool FullscreenShowControlsOnMouseMove
+    {
+        get => _settings.FullscreenShowControlsOnMouseMove;
+        set => UpdateCinemaSetting(_settings.FullscreenShowControlsOnMouseMove, value, v => _settings.FullscreenShowControlsOnMouseMove = v, nameof(FullscreenShowControlsOnMouseMove));
+    }
+
+    public int FullscreenControlsAutoHideSeconds
+    {
+        get => _settings.FullscreenControlsAutoHideSeconds;
+        set
+        {
+            var clamped = Math.Clamp(value, 1, 15);
+            if (_settings.FullscreenControlsAutoHideSeconds == clamped) return;
+            _settings.FullscreenControlsAutoHideSeconds = clamped;
+            OnPropertyChanged();
+            CinemaSettingsChanged?.Invoke(this, EventArgs.Empty);
+            QueueSettingsSave();
+        }
+    }
+
+    public bool FullscreenCursorAutoHide
+    {
+        get => _settings.FullscreenCursorAutoHide;
+        set => UpdateCinemaSetting(_settings.FullscreenCursorAutoHide, value, v => _settings.FullscreenCursorAutoHide = v, nameof(FullscreenCursorAutoHide));
+    }
+
+    public bool EscapeExitsFullscreen
+    {
+        get => _settings.EscapeExitsFullscreen;
+        set => UpdateCinemaSetting(_settings.EscapeExitsFullscreen, value, v => _settings.EscapeExitsFullscreen = v, nameof(EscapeExitsFullscreen));
+    }
+
+    public bool RememberWindowGeometry
+    {
+        get => _settings.RememberWindowGeometry;
+        set => UpdateCinemaSetting(_settings.RememberWindowGeometry, value, v => _settings.RememberWindowGeometry = v, nameof(RememberWindowGeometry));
+    }
+
+    public bool ReduceMotion
+    {
+        get => _settings.ReduceMotion;
+        set => UpdateCinemaSetting(_settings.ReduceMotion, value, v => _settings.ReduceMotion = v, nameof(ReduceMotion));
+    }
+
     public async Task InitializeViewAsync()
     {
         if (_initialized) return;
@@ -314,6 +407,17 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(Volume));
         OnPropertyChanged(nameof(SelectedTheme));
         OnPropertyChanged(nameof(SelectedTypography));
+        OnPropertyChanged(nameof(CinemaAutoExpand));
+        OnPropertyChanged(nameof(RestoreSidebarWhenPlaybackStops));
+        OnPropertyChanged(nameof(ShowSidebarWhenPaused));
+        OnPropertyChanged(nameof(FullscreenHideTransport));
+        OnPropertyChanged(nameof(FullscreenShowControlsOnMouseMove));
+        OnPropertyChanged(nameof(FullscreenControlsAutoHideSeconds));
+        OnPropertyChanged(nameof(FullscreenCursorAutoHide));
+        OnPropertyChanged(nameof(EscapeExitsFullscreen));
+        OnPropertyChanged(nameof(RememberWindowGeometry));
+        OnPropertyChanged(nameof(ReduceMotion));
+        UpdateCinemaSidebarState();
 
         StatusText = "Player shell ready. Waiting for the native video surface.";
         await ScanDiscsAsync();
@@ -382,7 +486,7 @@ public sealed class MainViewModel : ObservableObject
         }
 
         _settings.Volume = Volume;
-        await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
+        await PersistSettingsAsync().ConfigureAwait(false);
         await _playback.DisposeAsync().ConfigureAwait(false);
         _bluRayDiscoveryCancellation?.Dispose();
         _discWatchCancellation.Dispose();
@@ -416,6 +520,7 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task ToggleTracksAsync()
     {
+        IsSettingsPanelOpen = false;
         IsTracksPanelOpen = !IsTracksPanelOpen;
         if (!IsTracksPanelOpen) return;
 
@@ -673,6 +778,7 @@ public sealed class MainViewModel : ObservableObject
     private async Task BrowseDiscTitlesAsync(DiscSource? disc)
     {
         if (disc is null) return;
+        IsSettingsPanelOpen = false;
         IsTracksPanelOpen = false;
         IsBluRayPanelOpen = true;
 
@@ -957,6 +1063,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void ToggleBluRayPanel()
     {
+        IsSettingsPanelOpen = false;
         if (IsBluRayPanelOpen && IsBluRayTitleDiscoveryBusy)
             CancelBluRayTitleDiscovery();
         IsBluRayPanelOpen = !IsBluRayPanelOpen;
@@ -1146,10 +1253,93 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private void ToggleSettingsPanel()
+    {
+        IsSettingsPanelOpen = !IsSettingsPanelOpen;
+        if (IsSettingsPanelOpen)
+        {
+            IsTracksPanelOpen = false;
+            if (IsBluRayPanelOpen && IsBluRayTitleDiscoveryBusy) CancelBluRayTitleDiscovery();
+            IsBluRayPanelOpen = false;
+        }
+    }
+
+    private void ToggleSidebarVisibility()
+    {
+        var nextHidden = !IsCinemaSidebarHidden;
+        _sidebarHiddenOverride = nextHidden;
+        IsCinemaSidebarHidden = nextHidden;
+    }
+
     private void ToggleFullscreen()
     {
+        IsSettingsPanelOpen = false;
+        IsTracksPanelOpen = false;
+        if (IsBluRayPanelOpen && IsBluRayTitleDiscoveryBusy) CancelBluRayTitleDiscovery();
+        IsBluRayPanelOpen = false;
         IsFullscreen = !IsFullscreen;
         ToggleFullscreenRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void UpdateCinemaSidebarState()
+    {
+        if (_sidebarHiddenOverride is bool overrideHidden)
+        {
+            IsCinemaSidebarHidden = overrideHidden;
+            return;
+        }
+
+        if (!_settings.CinemaAutoExpand)
+        {
+            IsCinemaSidebarHidden = false;
+            return;
+        }
+
+        if ((_currentPlaybackState is PlaybackState.Stopped or PlaybackState.Idle or PlaybackState.Faulted) &&
+            !_settings.RestoreSidebarWhenPlaybackStops)
+        {
+            return;
+        }
+
+        IsCinemaSidebarHidden = _currentPlaybackState switch
+        {
+            PlaybackState.Playing => true,
+            PlaybackState.Paused => !_settings.ShowSidebarWhenPaused,
+            _ => false
+        };
+    }
+
+    private void UpdateCinemaSetting(bool current, bool value, Action<bool> assign, string propertyName, bool refreshSidebar = false)
+    {
+        if (current == value) return;
+        assign(value);
+        OnPropertyChanged(propertyName);
+        if (refreshSidebar)
+        {
+            _sidebarHiddenOverride = null;
+            UpdateCinemaSidebarState();
+        }
+        CinemaSettingsChanged?.Invoke(this, EventArgs.Empty);
+        QueueSettingsSave();
+    }
+
+    private void QueueSettingsSave() => _ = PersistSettingsAsync();
+
+    private async Task PersistSettingsAsync()
+    {
+        await _settingsSaveGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await _logger.WarningAsync($"Could not persist settings: {ex.Message}").ConfigureAwait(false);
+        }
+        finally
+        {
+            _settingsSaveGate.Release();
+        }
     }
 
     private void OnPlaybackStateChanged(object? sender, PlaybackStateChangedEventArgs e)
@@ -1166,6 +1356,19 @@ public sealed class MainViewModel : ObservableObject
             if (!IsScrubbing) ScrubPosition = snapshot.Position.TotalSeconds;
             IsMuted = snapshot.IsMuted;
             PlayPauseText = snapshot.State == PlaybackState.Paused ? "Play" : "Pause";
+
+            var previousState = _currentPlaybackState;
+            _currentPlaybackState = snapshot.State;
+            if (snapshot.State is PlaybackState.Stopped or PlaybackState.Idle or PlaybackState.Faulted)
+            {
+                if (_settings.RestoreSidebarWhenPlaybackStops)
+                    _sidebarHiddenOverride = null;
+            }
+            else if ((previousState is PlaybackState.Stopped or PlaybackState.Idle or PlaybackState.Faulted) && snapshot.State == PlaybackState.Playing)
+            {
+                _sidebarHiddenOverride = null;
+            }
+            UpdateCinemaSidebarState();
 
             // DVD reconciliation happens on the isolated playback polling thread just
             // before the reconciled snapshot is published. Use that state event as the
@@ -1236,7 +1439,7 @@ public sealed class MainViewModel : ObservableObject
 
     private static void CopySettings(AppSettings source, AppSettings destination)
     {
-        destination.SchemaVersion = source.SchemaVersion;
+        destination.SchemaVersion = Math.Max(3, source.SchemaVersion);
         destination.Volume = Math.Clamp(source.Volume, 0, 100);
         destination.LastOpenDirectory = source.LastOpenDirectory;
         destination.WindowWidth = source.WindowWidth;
@@ -1248,5 +1451,14 @@ public sealed class MainViewModel : ObservableObject
         destination.TypographyProfile = string.IsNullOrWhiteSpace(source.TypographyProfile) ? "Cadence" : source.TypographyProfile;
         destination.TextSize = string.IsNullOrWhiteSpace(source.TextSize) ? "Standard" : source.TextSize;
         destination.ReduceMotion = source.ReduceMotion;
+        destination.CinemaAutoExpand = source.CinemaAutoExpand;
+        destination.RestoreSidebarWhenPlaybackStops = source.RestoreSidebarWhenPlaybackStops;
+        destination.ShowSidebarWhenPaused = source.ShowSidebarWhenPaused;
+        destination.FullscreenHideTransport = source.FullscreenHideTransport;
+        destination.FullscreenShowControlsOnMouseMove = source.FullscreenShowControlsOnMouseMove;
+        destination.FullscreenControlsAutoHideSeconds = Math.Clamp(source.FullscreenControlsAutoHideSeconds, 1, 15);
+        destination.FullscreenCursorAutoHide = source.FullscreenCursorAutoHide;
+        destination.EscapeExitsFullscreen = source.EscapeExitsFullscreen;
+        destination.RememberWindowGeometry = source.RememberWindowGeometry;
     }
 }
