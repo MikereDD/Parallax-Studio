@@ -20,7 +20,7 @@ At build/run time Parallax checks, in order:
 
 When a local provider is found, `build.ps1` stages the user's `libmmbd64.dll` into the application output and creates runtime compatibility aliases named `libaacs.dll` and `libbdplus.dll`. If the standard bootstrapped providers exist, they are preserved alongside the runtime as `libaacs.standard.dll` and `libbdplus.standard.dll`.
 
-The staging step verifies that the alias files match the local `libmmbd64.dll` before launch. The playback service also sets process-local `LIBAACS_PATH` and `LIBBDPLUS_PATH` to the selected provider and records the active provider in the log.
+The staging step verifies that the alias files match the local `libmmbd64.dll` before launch and records the provider path and SHA-256 in a `libmmbd.staged` marker beside the aliases. While that marker exists, a plain `dotnet build` never overwrites the aliases with the standard libraries; removing the marker (or running `dotnet clean`) returns the next build to the standard provider. `scripts/Test-ProviderStaging.ps1` checks that the staged provider matches the marker. The playback service also sets process-local `LIBAACS_PATH` and `LIBBDPLUS_PATH` to the selected provider and records the active provider in the log.
 
 If MakeMKV is unavailable, Parallax falls back to the standard bootstrapped `libaacs`/`libbdplus` path. Protected-disc success then depends on that provider's normal configuration and the specific disc.
 

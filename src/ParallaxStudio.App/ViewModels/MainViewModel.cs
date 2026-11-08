@@ -925,21 +925,9 @@ public sealed class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            if (disc.Kind == DiscKind.Dvd && ex.Message.Contains("isolated native probe failed", StringComparison.OrdinalIgnoreCase))
-            {
-                StatusText = ex.Message;
-                MessageBox.Show(
-                    ex.Message,
-                    "DVD playback safety check failed",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-            }
-            else
-            {
-                StatusText = disc.Kind == DiscKind.BluRay
-                    ? "Blu-ray could not be opened. The disc may require AACS keys or unsupported protection."
-                    : "DVD could not be opened. Check libdvdcss availability and the playback log.";
-            }
+            StatusText = disc.Kind == DiscKind.BluRay
+                ? "Blu-ray could not be opened. The disc may require AACS keys or unsupported protection."
+                : "DVD could not be opened. Check libdvdcss availability and the playback log.";
             await _logger.ErrorAsync($"Could not open {disc.KindLabel} from {disc.DriveRoot}", ex);
         }
     }
@@ -1079,19 +1067,7 @@ public sealed class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            if (_activeDisc.Kind == DiscKind.Dvd && ex.Message.Contains("isolated native probe failed", StringComparison.OrdinalIgnoreCase))
-            {
-                StatusText = ex.Message;
-                MessageBox.Show(
-                    ex.Message,
-                    "DVD playback safety check failed",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-            }
-            else
-            {
-                StatusText = $"{_activeDisc.KindLabel} title {title.DisplayNumber} could not be opened.";
-            }
+            StatusText = $"{_activeDisc.KindLabel} title {title.DisplayNumber} could not be opened.";
             await _logger.ErrorAsync(StatusText, ex);
         }
     }

@@ -115,7 +115,10 @@ Parallax Studio's source repository **does not download or bundle MakeMKV**. Whe
 2. copies the locally installed `libmmbd64.dll` into the build output;
 3. stages that same local file as runtime `libaacs.dll` and `libbdplus.dll`, which is the compatibility naming expected by the libbluray/libmpv disc path;
 4. verifies the staged files against the local provider with SHA-256 before launch;
-5. reports the active disc-decryption provider in the application log.
+5. writes a `libmmbd.staged` marker (provider path and SHA-256) into the build output;
+6. reports the active disc-decryption provider in the application log.
+
+While the `libmmbd.staged` marker exists, a plain `dotnet build` leaves the staged LibMMBD aliases untouched; without the marker the build copies the standard `native\libaacs.dll`/`libbdplus.dll` into the output. `dotnet clean` removes the marker and the staged files, so the next build returns to the standard provider. Provider selection after every build path is therefore deterministic: `build.ps1` with MakeMKV found stages LibMMBD, everything else yields the standard provider. `scripts/Test-ProviderStaging.ps1 -Configuration <Debug|Release>` verifies which provider is staged and fails if the output contradicts the marker. If a later `build.ps1` run no longer finds MakeMKV, it removes the marker and restores the standard libraries instead of silently keeping a stale alias.
 
 Both `build.ps1` and the playback service honor `PARALLAX_STUDIO_LIBMMBD` first to point at a specific local `libmmbd64.dll` when the standard MakeMKV installation path is not appropriate. If the variable is set but the file does not exist, the build stops with a clear error instead of silently falling back to the standard locations.
 

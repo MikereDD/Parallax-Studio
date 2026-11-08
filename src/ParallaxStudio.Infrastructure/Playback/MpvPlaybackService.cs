@@ -19,9 +19,6 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private int _activeDvdTitleIndex = -1;
     private string? _loadedDvdCacheKey;
     private readonly Dictionary<string, IReadOnlyList<BluRayTitle>> _dvdTitleCache = new(StringComparer.OrdinalIgnoreCase);
-    private int _pendingDvdEditionIndex = -1;
-    private bool _pendingDvdEditionSwitchIssued;
-    private readonly HashSet<string> _dvdProbePassCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dvdFullMapCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<int, int>> _dvdPlaybackTitleByMetadataIndex = new(StringComparer.OrdinalIgnoreCase);
     // Per-disc outcome of the last full title map (unique, ambiguous, unmatched per title),
@@ -1395,39 +1392,6 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                     var fileLoaded = diagnosticEvents.Any(item => item.Kind == "file-loaded");
                     var failed = diagnosticEvents.LastOrDefault(item => item.Kind == "end-file" && item.Level == "error");
 
-                    if (failed is not null && _pendingDvdEditionIndex >= 0)
-                    {
-                        _pendingDvdEditionIndex = -1;
-                        _pendingDvdEditionSwitchIssued = false;
-                    }
-
-                    if (fileLoaded && _pendingDvdEditionIndex >= 0)
-                    {
-                        if (!_pendingDvdEditionSwitchIssued)
-                        {
-                            var pendingEdition = _pendingDvdEditionIndex;
-                            _library.SetProperty(_context, "edition", pendingEdition.ToString(CultureInfo.InvariantCulture));
-                            _pendingDvdEditionSwitchIssued = true;
-                            diagnosticEvents.Add(new MpvDiagnosticEvent(
-                                "dvd-edition",
-                                "info",
-                                "player",
-                                $"Base DVD load completed. Switching to DVD title {pendingEdition + 1} through edition={pendingEdition}."));
-                        }
-                        else
-                        {
-                            var selectedEdition = ParseInt(_library.GetProperty(_context, "current-edition"), -1);
-                            diagnosticEvents.Add(new MpvDiagnosticEvent(
-                                "dvd-edition",
-                                "info",
-                                "player",
-                                $"DVD title switch completed. Requested edition={_pendingDvdEditionIndex}, current-edition={selectedEdition}."));
-                            _activeDvdTitleIndex = _pendingDvdEditionIndex;
-                            _pendingDvdEditionIndex = -1;
-                            _pendingDvdEditionSwitchIssued = false;
-                        }
-                    }
-
                     var position = ParseSeconds(_library.GetProperty(_context, "time-pos"));
                     var duration = ParseSeconds(_library.GetProperty(_context, "duration"));
                     var pause = _library.GetProperty(_context, "pause");
@@ -1449,14 +1413,13 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 
                     _paused = string.Equals(pause, "yes", StringComparison.OrdinalIgnoreCase);
                     var state = Snapshot.State;
-                    var dvdTitleTransitionPending = _pendingDvdEditionIndex >= 0;
                     if (!string.IsNullOrWhiteSpace(Snapshot.Source))
                     {
                         if (failed is not null)
                         {
                             state = PlaybackState.Faulted;
                         }
-                        else if (Snapshot.State == PlaybackState.Loading && (!fileLoaded || dvdTitleTransitionPending))
+                        else if (Snapshot.State == PlaybackState.Loading && !fileLoaded)
                         {
                             // Do not report Playing until mpv has completed the final file/title load.
                             state = PlaybackState.Loading;
@@ -1579,75 +1542,6 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             ConfigureDiscDecryptionProvider();
             return _discDecryptionProvider ?? "plain libaacs/libbdplus fallback";
         }
-    }
-
-    private async Task EnsureDvdRuntimeProbeAsync(DiscSource disc, int? titleNumber, CancellationToken cancellationToken)
-    {
-        var cacheKey = $"{BuildDiscCacheKey(disc)}|{(titleNumber is > 0 ? titleNumber.Value.ToString(CultureInfo.InvariantCulture) : "longest")}";
-        if (_dvdProbePassCache.Contains(cacheKey))
-            return;
-
-        var probePath = Path.Combine(AppContext.BaseDirectory, "dvd-probe", "ParallaxStudio.DvdProbe.exe");
-        if (!File.Exists(probePath))
-            throw new InvalidOperationException($"DVD safety probe is missing: {probePath}");
-
-        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = probePath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        startInfo.ArgumentList.Add(device);
-        if (titleNumber is > 0)
-            startInfo.ArgumentList.Add(titleNumber.Value.ToString(CultureInfo.InvariantCulture));
-
-        await logger.InfoAsync(
-            $"Starting isolated DVD runtime probe for {(titleNumber is > 0 ? $"title {titleNumber}" : "longest title")} on {device}.",
-            cancellationToken).ConfigureAwait(false);
-
-        using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        if (!process.Start())
-            throw new InvalidOperationException("The DVD safety probe process could not be started.");
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        try
-        {
-            var exitTask = process.WaitForExitAsync(cancellationToken);
-            var completed = await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromSeconds(60), cancellationToken)).ConfigureAwait(false);
-            if (!ReferenceEquals(completed, exitTask))
-            {
-                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
-                throw new TimeoutException("The isolated DVD runtime probe did not finish within 60 seconds.");
-            }
-            await exitTask.ConfigureAwait(false);
-        }
-        catch
-        {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
-
-        var stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
-        var stderr = (await stderrTask.ConfigureAwait(false)).Trim();
-        if (!string.IsNullOrWhiteSpace(stdout))
-            await logger.InfoAsync($"DVD probe output: {stdout}", cancellationToken).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(stderr))
-            await logger.WarningAsync($"DVD probe error output: {stderr}", cancellationToken).ConfigureAwait(false);
-
-        if (process.ExitCode != 0)
-        {
-            var unsignedExit = unchecked((uint)process.ExitCode);
-            throw new InvalidOperationException(
-                $"DVD playback was blocked because the isolated native probe failed (exit 0x{unsignedExit:X8}). " +
-                "Parallax Studio remained open; check the playback log for the probe output.");
-        }
-
-        _dvdProbePassCache.Add(cacheKey);
-        await logger.InfoAsync("DVD runtime safety probe passed.", cancellationToken).ConfigureAwait(false);
     }
 
     private async Task LogNativeDiscLibrariesAsync(CancellationToken cancellationToken)

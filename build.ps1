@@ -133,6 +133,16 @@ if ($makeMkvLibMmbd) {
         throw 'MakeMKV LibMMBD staging verification failed.'
     }
 
+    # The marker tells the app project (ParallaxStudio.App.csproj) that these aliases are an
+    # intentionally staged LibMMBD provider, so a later plain dotnet build must not overwrite
+    # them with the standard native libraries.
+    $markerPath = Join-Path $appOutput 'libmmbd.staged'
+    Set-Content -LiteralPath $markerPath -Encoding ascii -Value @(
+        "provider=$makeMkvLibMmbd",
+        "sha256=$providerHash",
+        "stagedUtc=$((Get-Date).ToUniversalTime().ToString('o'))"
+    )
+
     Write-Host "MakeMKV LibMMBD staged for protected Blu-ray playback:" -ForegroundColor Green
     Write-Host "  provider: $makeMkvLibMmbd"
     Write-Host "  libaacs.dll: $runtimeAacs"
@@ -140,6 +150,21 @@ if ($makeMkvLibMmbd) {
     Write-Host "  SHA-256: $providerHash"
 }
 else {
+    $markerPath = Join-Path $appOutput 'libmmbd.staged'
+    if (Test-Path -LiteralPath $markerPath) {
+        # MakeMKV disappeared after a previous staging. Restore the standard provider so the
+        # selected provider stays deterministic instead of silently keeping a stale alias.
+        $standardAacs = Join-Path $root 'native\libaacs.dll'
+        $standardBdPlus = Join-Path $root 'native\libbdplus.dll'
+        if (Test-Path -LiteralPath $standardAacs) {
+            Copy-Item -LiteralPath $standardAacs -Destination (Join-Path $appOutput 'libaacs.dll') -Force
+        }
+        if (Test-Path -LiteralPath $standardBdPlus) {
+            Copy-Item -LiteralPath $standardBdPlus -Destination (Join-Path $appOutput 'libbdplus.dll') -Force
+        }
+        Remove-Item -LiteralPath $markerPath -Force
+        Write-Host 'Previously staged LibMMBD removed; standard libaacs/libbdplus restored.' -ForegroundColor DarkYellow
+    }
     Write-Warning 'MakeMKV libmmbd64.dll was not found. Standard libaacs/libbdplus will remain active.'
 }
 

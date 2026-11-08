@@ -219,12 +219,6 @@ internal sealed class DvdPlaybackHostClient : IAsyncDisposable
             response => response.Chapters,
             cancellationToken).ConfigureAwait(false);
 
-    public async Task<IReadOnlyList<DvdEditionInfo>> GetEditionsAsync(CancellationToken cancellationToken) =>
-        await RequestValueAsync<DvdEditionInfo[]>(
-            "editions",
-            response => response.Editions,
-            cancellationToken).ConfigureAwait(false);
-
     public Task TogglePauseAsync(CancellationToken cancellationToken) =>
         RequestOkAsync(new DvdHostRequest("toggle-pause"), cancellationToken);
 

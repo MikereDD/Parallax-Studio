@@ -35,7 +35,7 @@ public sealed record BluRayTitle(
                 return $"DVD Title {DisplayNumber}";
             }
 
-            if (!string.IsNullOrWhiteSpace(Name) && !Name.Equals("The Road", StringComparison.OrdinalIgnoreCase)) return Name!;
+            if (!string.IsNullOrWhiteSpace(Name)) return Name!;
             if (IsLikelyMainFeature) return "Blu-ray Main Feature";
             if (Duration >= TimeSpan.FromMinutes(10) && Duration < TimeSpan.FromMinutes(30)) return $"Bonus Feature — {DurationText}";
             if (Duration >= TimeSpan.FromMinutes(3) && Duration < TimeSpan.FromMinutes(10)) return $"Deleted Scene / Featurette Candidate — {DurationText}";

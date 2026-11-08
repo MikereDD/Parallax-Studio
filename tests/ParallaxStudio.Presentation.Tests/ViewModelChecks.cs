@@ -134,6 +134,16 @@ internal static class ViewModelChecks
             backend.Publish(Playing(first, "First film") with { State = PlaybackState.Faulted });
             Check(vm.PlayPauseText == "Play", "Faulted must not offer Pause");
 
+            // A Blu-ray title genuinely named "The Road" must display its real name;
+            // disc-specific suppressions are not allowed. Generic fallbacks stay unchanged.
+            var roadTitle = new BluRayTitle(0, false, TimeSpan.FromMinutes(111), Name: "The Road", IsLikelyMainFeature: true);
+            Check(roadTitle.PrimaryText == "The Road", "A Blu-ray title genuinely named The Road must display its real name");
+            var unnamedMainFeature = new BluRayTitle(0, false, TimeSpan.FromMinutes(111), IsLikelyMainFeature: true);
+            Check(unnamedMainFeature.PrimaryText == "Blu-ray Main Feature", "Unnamed Blu-ray main-feature fallback must remain unchanged");
+            var dvdFeature = new BluRayTitle(2, false, TimeSpan.FromMinutes(95), SourceKind: DiscKind.Dvd, IsLikelyMainFeature: true);
+            Check(dvdFeature.PrimaryText == $"Feature / Long Program — {dvdFeature.DurationText}",
+                "DVD title presentation must remain unchanged");
+
             // Switching to a local file must not leave the previous disc's titles,
             // selection, or browser panel behind.
             var staleTitle = new BluRayTitle(1, false, TimeSpan.FromMinutes(44));

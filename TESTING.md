@@ -74,7 +74,10 @@ dotnet build .\ParallaxStudio.sln -c Release
 Stage native playback dependencies before testing actual playback. The current
 manifest pins libmpv `20261021-git-e471496c56` and its archive SHA-256. Use the
 normal bootstrap and `scripts/Verify-NativeDependencies.ps1` to validate the
-staged files; no alternate package or manual manifest override is needed.
+staged files; no alternate package or manual manifest override is needed. Run
+`scripts/Test-ProviderStaging.ps1 -Configuration <Debug|Release>` to confirm the
+build output carries the intended disc-decryption provider (MakeMKV LibMMBD when
+`libmmbd.staged` is present, otherwise the standard libaacs/libbdplus).
 
 1. At 1380×860 and 1020×680, cycle through OLED Black, Dark Monochrome, Graphite,
    Midnight Indigo, Aurora Pulse, and Obsidian Gold, then cycle back. Check the
