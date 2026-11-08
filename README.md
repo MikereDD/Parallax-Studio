@@ -117,7 +117,7 @@ Parallax Studio's source repository **does not download or bundle MakeMKV**. Whe
 4. verifies the staged files against the local provider with SHA-256 before launch;
 5. reports the active disc-decryption provider in the application log.
 
-The playback service also accepts `PARALLAX_STUDIO_LIBMMBD` to point at a specific local `libmmbd64.dll` when the standard MakeMKV installation path is not appropriate.
+Both `build.ps1` and the playback service honor `PARALLAX_STUDIO_LIBMMBD` first to point at a specific local `libmmbd64.dll` when the standard MakeMKV installation path is not appropriate. If the variable is set but the file does not exist, the build stops with a clear error instead of silently falling back to the standard locations.
 
 **Redistribution note:** the build output may contain files copied from the user's local MakeMKV installation. Do not treat those locally staged files as Parallax-owned redistributable dependencies. Packaging/public-release work must review the applicable third-party licenses and redistribution terms before including any such binary.
 

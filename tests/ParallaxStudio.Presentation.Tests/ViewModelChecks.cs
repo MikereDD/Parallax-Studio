@@ -4,9 +4,11 @@ using System.Reflection;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using ParallaxStudio.App;
+using ParallaxStudio.App.Common;
 using ParallaxStudio.App.Services;
 using ParallaxStudio.App.ViewModels;
 using ParallaxStudio.Core.Enums;
@@ -117,6 +119,53 @@ internal static class ViewModelChecks
             backend.Publish(Playing("DVD disc • E:\\ • DVD title 4", "Disc — Program"));
             await Task.Delay(250);
             Check(vm.SourceText == "DVD · E:\\ · DVD title 4", "DVD presentation must use the backend's reconciled title number");
+
+            // The transport action label must follow the real playback state: Pause only
+            // while playing or loading (the backend is unpaused and will play), Play for
+            // everything else. A stopped or faulted player must never offer "Pause".
+            backend.Publish(Playing(first, "First film"));
+            Check(vm.PlayPauseText == "Pause", "Playing must offer the Pause action");
+            backend.Publish(Playing(first, "First film") with { State = PlaybackState.Paused });
+            Check(vm.PlayPauseText == "Play", "Paused must offer the Play action");
+            backend.Publish(Playing(first, "First film") with { State = PlaybackState.Loading });
+            Check(vm.PlayPauseText == "Pause", "Loading must offer the upcoming Pause action");
+            backend.Publish(Playing(first, "First film") with { State = PlaybackState.Stopped });
+            Check(vm.PlayPauseText == "Play", "Stopped must not offer Pause");
+            backend.Publish(Playing(first, "First film") with { State = PlaybackState.Faulted });
+            Check(vm.PlayPauseText == "Play", "Faulted must not offer Pause");
+
+            // Switching to a local file must not leave the previous disc's titles,
+            // selection, or browser panel behind.
+            var staleTitle = new BluRayTitle(1, false, TimeSpan.FromMinutes(44));
+            vm.BluRayTitles.Add(staleTitle);
+            vm.SelectedBluRayTitle = staleTitle;
+            vm.IsBluRayPanelOpen = true;
+            backend.Publish(Playing(first, "First film"));
+            await vm.OpenPathAsync(first);
+            Check(vm.BluRayTitles.Count == 0 && vm.SelectedBluRayTitle is null && !vm.IsBluRayPanelOpen,
+                "Opening a local file must clear stale optical titles, selection, and the title browser");
+
+            // The shared transport shortcuts drive the same commands from the main window
+            // and the floating fullscreen controls window.
+            var volumeBefore = vm.Volume;
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Up) && vm.Volume == Math.Min(100, volumeBefore + 5),
+                "Up must raise the volume by 5");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Down) && vm.Volume == volumeBefore,
+                "Down must lower the volume by 5");
+            vm.Volume = 100;
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Up) && vm.Volume == 100, "Volume must clamp at 100");
+            vm.Volume = 0;
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Down) && vm.Volume == 0, "Volume must clamp at 0");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Space), "Space must be handled");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Left), "Left must be handled");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Right), "Right must be handled");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.M), "M must be handled");
+            Check(!vm.IsFullscreen && TransportKeyboardShortcuts.TryHandle(vm, Key.F) && vm.IsFullscreen,
+                "F must enter fullscreen");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Escape) && !vm.IsFullscreen,
+                "Escape must leave fullscreen when enabled");
+            Check(!TransportKeyboardShortcuts.TryHandle(vm, Key.Escape), "Escape outside fullscreen is not a transport key");
+            Check(!TransportKeyboardShortcuts.TryHandle(vm, Key.A), "Unrelated keys must not be handled");
 
             var previewIndex = Array.IndexOf(args, "--preview");
             await RenderChecksAsync(vm, backend, previewIndex >= 0 && previewIndex + 1 < args.Length

@@ -59,6 +59,7 @@ internal static partial class Program
             ("service: failure before routing is claimed keeps current playback", ServiceEarlyFailureKeepsPlaybackAsync),
             ("service: cancelled replacement leaves no host running", ServiceCancelledReplacementAsync),
             ("service: dispose with a hung host is bounded", ServiceDisposeHungHostAsync),
+            ("service: toggle pause without active media is a no-op", ServiceTogglePauseWithoutMediaIsNoOpAsync),
             .. TitleMatchingChecks
         ];
 
@@ -522,6 +523,20 @@ internal static partial class Program
         Check(await Task.WhenAny(dispose, Task.Delay(TeardownBound)) == dispose, "Service dispose must be bounded");
         await dispose;
         Check(!IsAlive(pid), "Dispose must not leave the hung host running");
+    }
+
+    private static async Task ServiceTogglePauseWithoutMediaIsNoOpAsync()
+    {
+        // Without an initialized backend, toggling pause must not throw and must not
+        // publish a Playing/Paused state the poll loop would have to correct.
+        var log = new TestLogger();
+        await using var service = NewService(log);
+
+        await service.TogglePauseAsync();
+
+        Check(service.Snapshot.State == PlaybackState.Disconnected,
+            $"Toggle with no active media must not publish a playback state, was {service.Snapshot.State}");
+        log.AssertNoErrors();
     }
 
     // ----- helpers ----------------------------------------------------------------------

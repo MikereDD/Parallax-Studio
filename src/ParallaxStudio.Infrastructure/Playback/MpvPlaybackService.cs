@@ -1121,11 +1121,19 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             return;
         }
 
+        // With no actively loading or playing media there is nothing to pause; toggling
+        // would only publish a Playing/Paused state the poll loop has to correct.
+        if (Snapshot.State is not (PlaybackState.Playing or PlaybackState.Paused or PlaybackState.Loading))
+            return;
+
         await WithInitializedContextAsync(context =>
         {
             _paused = !_paused;
             _library.SetProperty(context, "pause", _paused ? "yes" : "no");
-            SetSnapshot(Snapshot with { State = _paused ? PlaybackState.Paused : PlaybackState.Playing });
+            // During Loading the poll loop owns the published state; only a settled
+            // Playing/Paused state is flipped here.
+            if (Snapshot.State is PlaybackState.Playing or PlaybackState.Paused)
+                SetSnapshot(Snapshot with { State = _paused ? PlaybackState.Paused : PlaybackState.Playing });
         }, cancellationToken).ConfigureAwait(false);
     }
 

@@ -655,7 +655,12 @@ public sealed class MainViewModel : ObservableObject
     {
         try
         {
+            CancelBluRayTitleDiscovery();
             _activeDisc = null;
+            IsBluRayPanelOpen = false;
+            BluRayTitles.Clear();
+            SelectedBluRayTitle = null;
+            BluRayTitleSummary = "Select a Blu-ray or DVD to discover titles, episodes, playlists, and extras.";
             _settings.LastOpenDirectory = Path.GetDirectoryName(path);
             _activeResumePath = Path.GetFullPath(path);
             _lastResumePersistUtc = DateTimeOffset.MinValue;
@@ -1597,7 +1602,9 @@ public sealed class MainViewModel : ObservableObject
             DurationSeconds = snapshot.Duration.TotalSeconds;
             if (!IsScrubbing) ScrubPosition = snapshot.Position.TotalSeconds;
             IsMuted = snapshot.IsMuted;
-            PlayPauseText = snapshot.State == PlaybackState.Paused ? "Play" : "Pause";
+            // Loading shows "Pause": the backend was left unpaused, so playback will begin
+            // once the load completes and pausing is the action the button would take.
+            PlayPauseText = snapshot.State is PlaybackState.Playing or PlaybackState.Loading ? "Pause" : "Play";
             UpdateMediaPresentation(snapshot);
 
             // Refresh on the first usable snapshot, even if the title browser is closed.

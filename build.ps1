@@ -88,11 +88,24 @@ Write-Host "Isolated DVD playback host staged: $dvdHostRuntime" -ForegroundColor
 
 # Stage MakeMKV LibMMBD under the DLL names libbluray/libmpv requests on Windows.
 # The source native directory remains untouched; only this build output is changed.
-$makeMkvCandidates = @(
-    (Join-Path ${env:ProgramFiles(x86)} 'MakeMKV\libmmbd64.dll'),
-    (Join-Path $env:ProgramFiles 'MakeMKV\libmmbd64.dll')
-) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-$makeMkvLibMmbd = $makeMkvCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+# PARALLAX_STUDIO_LIBMMBD selects the provider explicitly. An explicitly configured
+# path that does not exist is a configuration error, not a fallback condition.
+$makeMkvLibMmbd = $null
+$configuredLibMmbd = $env:PARALLAX_STUDIO_LIBMMBD
+if (-not [string]::IsNullOrWhiteSpace($configuredLibMmbd)) {
+    if (-not (Test-Path -LiteralPath $configuredLibMmbd)) {
+        throw "PARALLAX_STUDIO_LIBMMBD is set to '$configuredLibMmbd', but no file exists at that path. Point it at a valid libmmbd64.dll or unset it to use the standard MakeMKV install locations."
+    }
+    $makeMkvLibMmbd = (Resolve-Path -LiteralPath $configuredLibMmbd).Path
+    Write-Host "Using LibMMBD from PARALLAX_STUDIO_LIBMMBD: $makeMkvLibMmbd" -ForegroundColor DarkCyan
+}
+else {
+    $makeMkvCandidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'MakeMKV\libmmbd64.dll'),
+        (Join-Path $env:ProgramFiles 'MakeMKV\libmmbd64.dll')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $makeMkvLibMmbd = $makeMkvCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
 
 if ($makeMkvLibMmbd) {
     $standardAacs = Join-Path $root 'native\libaacs.dll'
