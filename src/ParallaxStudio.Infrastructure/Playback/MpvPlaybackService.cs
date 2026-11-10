@@ -15,6 +15,14 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private int _activeBluRayTitleIndex = -1;
     private string? _loadedBluRayCacheKey;
     private readonly Dictionary<string, IReadOnlyList<BluRayTitle>> _bluRayTitleCache = new(StringComparer.OrdinalIgnoreCase);
+    // libbluray edition list per disc (session-scoped), probed headlessly the first time
+    // an indexed Blu-ray title is requested; the basis for evidence-based title mapping.
+    private readonly Dictionary<string, IReadOnlyList<BluRayEditionInfo>> _bluRayEditionCache = new(StringComparer.OrdinalIgnoreCase);
+    // Post-load verification state for indexed Blu-ray playback (refusal-over-guess).
+    private BluRayTitle? _requestedBluRayTitle;
+    private int _activeBluRayEditionSelector = -1;
+    private bool _bluRayVerificationPending;
+    private string? _bluRayVerificationSource;
     private string? _activeDvdDevice;
     private int _activeDvdTitleIndex = -1;
     private string? _loadedDvdCacheKey;
@@ -227,23 +235,58 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         try
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+            var cacheKey = BuildDiscCacheKey(disc);
+
+            if (!_bluRayTitleCache.TryGetValue(cacheKey, out var titles))
+            {
+                titles = await DiscoverTitlesWithMakeMkvAsync(disc, cancellationToken).ConfigureAwait(false);
+                if (titles.Count > 0)
+                    _bluRayTitleCache[cacheKey] = titles;
+            }
+
+            var requested = titles.FirstOrDefault(title => title.Index == titleIndex)
+                ?? throw new InvalidOperationException($"Blu-ray title {titleIndex + 1} is not present in the current disc metadata.");
+
+            var editions = await EnsureBluRayEditionMapAsync(disc, cacheKey, cancellationToken).ConfigureAwait(false);
+            var resolution = BluRayEditionResolver.Resolve(requested, editions);
+            if (!resolution.IsResolved)
+            {
+                await logger.InfoAsync(
+                    $"Blu-ray title {titleIndex + 1} refused for {device}: {resolution.Detail}.",
+                    cancellationToken).ConfigureAwait(false);
+                throw new OpticalTitleUnavailableException(
+                    $"Parallax could not confidently match Blu-ray title {titleIndex + 1} " +
+                    $"({DescribeBluRayTitle(requested)}) to a libbluray edition: {resolution.Detail}. " +
+                    "The title was not started rather than risking playback of the wrong program.");
+            }
+
             _activeBluRayDevice = device;
-            _loadedBluRayCacheKey = BuildDiscCacheKey(disc);
+            _loadedBluRayCacheKey = cacheKey;
             _activeBluRayTitleIndex = titleIndex;
+            _requestedBluRayTitle = requested;
+            _activeBluRayEditionSelector = resolution.Selector;
+            _bluRayVerificationPending = true;
+            _bluRayVerificationSource = $"Blu-ray disc • {device} • title {titleIndex + 1}";
             LastPlaybackError = null;
+
+            await logger.InfoAsync(
+                $"Blu-ray title resolved: MakeMKV title {requested.DisplayNumber} ({DescribeBluRayTitle(requested)}) -> " +
+                $"libbluray edition {resolution.Selector} (title {resolution.Selector + 1}) by {resolution.Detail}; playing bd://{resolution.Selector}.",
+                cancellationToken).ConfigureAwait(false);
+
             await WithInitializedContextAsync(context =>
             {
                 SetSnapshot(Snapshot with
                 {
                     State = PlaybackState.Loading,
-                    Source = $"Blu-ray disc • {device} • title {titleIndex + 1}",
+                    Source = _bluRayVerificationSource,
                     Title = $"{CleanDiscTitle(disc.DisplayName, device)} — Title {titleIndex + 1}",
                     Position = TimeSpan.Zero,
                     Duration = TimeSpan.Zero
                 });
 
                 _library.SetProperty(context, "bluray-device", device);
-                _library.Command(context, "loadfile", $"bd://{titleIndex}", "replace");
+                _library.Command(context, "loadfile", $"bd://{resolution.Selector}", "replace");
                 _paused = false;
             }, cancellationToken).ConfigureAwait(false);
 
@@ -253,6 +296,198 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         {
             _discDiscoveryGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Returns the libbluray edition list for the disc, probing it headlessly on first
+    /// use. The probe is the only trustworthy source of libbluray title indices; without
+    /// it, indexed playback cannot be verified and the caller must refuse.
+    /// </summary>
+    private async Task<IReadOnlyList<BluRayEditionInfo>> EnsureBluRayEditionMapAsync(
+        DiscSource disc,
+        string cacheKey,
+        CancellationToken cancellationToken)
+    {
+        if (_bluRayEditionCache.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        var editions = await Task.Run(
+                () => ProbeBluRayEditions(device, cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (editions.Count == 0)
+        {
+            throw new OpticalTitleUnavailableException(
+                "Parallax could not enumerate the disc's libbluray editions, so no Blu-ray title can be " +
+                "verified against the disc. The title was not started rather than risking playback of the wrong program.");
+        }
+
+        _bluRayEditionCache[cacheKey] = editions;
+        return editions;
+    }
+
+    /// <summary>
+    /// Headless equivalent of the DVD runtime probe: opens the disc on a scratch libmpv
+    /// context with no audio/video output and reads <c>edition-list</c> once the default
+    /// title has loaded. Runs on a thread-pool thread; returns an empty list on any
+    /// failure so the caller refuses instead of guessing.
+    /// </summary>
+    private IReadOnlyList<BluRayEditionInfo> ProbeBluRayEditions(string device, CancellationToken cancellationToken)
+    {
+        nint probe = nint.Zero;
+        try
+        {
+            ConfigureDiscDecryptionProvider();
+            if (!_library.TryLoad(out var loadError))
+            {
+                throw new InvalidOperationException(loadError ?? "libmpv could not be loaded.");
+            }
+
+            probe = _library.Create();
+            _library.SetOption(probe, "terminal", "no");
+            _library.SetOption(probe, "osc", "no");
+            _library.SetOption(probe, "idle", "yes");
+            _library.SetOption(probe, "keep-open", "no");
+            _library.SetOption(probe, "force-window", "no");
+            _library.SetOption(probe, "vo", "null");
+            _library.SetOption(probe, "ao", "null");
+            _library.SetOption(probe, "pause", "yes");
+            _library.Initialize(probe);
+            _library.SetProperty(probe, "bluray-device", device);
+            _library.Command(probe, "loadfile", "bd://", "replace");
+
+            var loaded = false;
+            string? failure = null;
+            var timeout = Stopwatch.StartNew();
+            while (!loaded && failure is null && timeout.Elapsed < TimeSpan.FromSeconds(90))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var item in _library.DrainEvents(probe))
+                {
+                    if (item.Kind == "file-loaded")
+                        loaded = true;
+                    else if (item.Kind == "end-file" && item.Level == "error")
+                        failure = item.Message;
+                }
+
+                if (!loaded && failure is null)
+                    Thread.Sleep(100);
+            }
+
+            if (!loaded)
+            {
+                logger.WarningAsync(
+                        $"Blu-ray edition probe for {device} did not load the disc " +
+                        (failure is not null ? $"({failure})" : $"(timeout after {timeout.Elapsed.TotalSeconds:0} s)") +
+                        "; indexed titles will be refused.",
+                        CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                return [];
+            }
+
+            var count = ParseInt(_library.GetProperty(probe, "edition-list/count"));
+            var editions = new List<BluRayEditionInfo>(count);
+            for (var index = 0; index < count; index++)
+            {
+                var prefix = $"edition-list/{index}/";
+                var selector = ParseInt(_library.GetProperty(probe, prefix + "id"), index);
+                var title = _library.GetProperty(probe, prefix + "title") ?? string.Empty;
+                var (duration, playlist) = BluRayEditionResolver.ParseEditionTitle(title);
+                editions.Add(new BluRayEditionInfo(selector, duration, playlist, title));
+            }
+
+            var withPlaylist = editions.Count(edition => !string.IsNullOrWhiteSpace(edition.Playlist));
+            logger.InfoAsync(
+                    $"Blu-ray edition map for {device}: {editions.Count} libbluray editions " +
+                    $"({withPlaylist} with playlist identity).",
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+            return editions;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.WarningAsync(
+                    $"Blu-ray edition probe for {device} failed: {ex.Message}. Indexed titles will be refused.",
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+            return [];
+        }
+        finally
+        {
+            if (probe != nint.Zero)
+            {
+                try { _library.TerminateDestroy(probe); }
+                catch { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Post-load refusal-over-guess check for indexed Blu-ray playback: the content that
+    /// actually loaded must agree with the requested MakeMKV title on runtime (within
+    /// tolerance) and chapter count (exact, when known). A contradiction stops playback
+    /// rather than letting an unrelated title play silently.
+    /// </summary>
+    private async Task VerifyLoadedBluRayTitleAsync(nint context, CancellationToken cancellationToken)
+    {
+        var requested = _requestedBluRayTitle;
+        if (requested is null)
+            return;
+
+        var selector = _activeBluRayEditionSelector;
+        var actualDuration = ParseSeconds(_library.GetProperty(context, "duration"));
+        var actualChapterCount = ParseInt(_library.GetProperty(context, "chapter-list/count"), -1);
+
+        var durationOk = requested.Duration <= TimeSpan.Zero || actualDuration <= TimeSpan.Zero ||
+            (actualDuration - requested.Duration).Duration() <= BluRayEditionResolver.DurationTolerance;
+        var chaptersOk = requested.ChapterCount <= 0 || actualChapterCount < 0 ||
+            actualChapterCount == requested.ChapterCount;
+
+        if (durationOk && chaptersOk)
+        {
+            await logger.InfoAsync(
+                $"Blu-ray title reconciled: requested MakeMKV title {requested.DisplayNumber} ({DescribeBluRayTitle(requested)}), " +
+                $"libbluray edition {selector} (title {selector + 1}), actual runtime={FormatDuration(actualDuration)}, " +
+                $"chapters={actualChapterCount} — verified.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var detail =
+            $"requested MakeMKV title {requested.DisplayNumber} ({DescribeBluRayTitle(requested)}), but libbluray edition " +
+            $"{selector} (title {selector + 1}) loaded runtime={FormatDuration(actualDuration)}, chapters={actualChapterCount}";
+        LastPlaybackError = "The loaded Blu-ray content does not match the selected title. Playback was stopped.";
+        await logger.ErrorAsync(
+            $"Blu-ray title verification failed: {detail}. Playback was stopped rather than risk playing the wrong title.",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        try { _library.Command(context, "stop"); }
+        catch (Exception ex)
+        {
+            await logger.WarningAsync($"Could not stop the mismatched Blu-ray title: {ex.Message}", cancellationToken).ConfigureAwait(false);
+        }
+
+        SetSnapshot(Snapshot with
+        {
+            State = PlaybackState.Stopped,
+            Position = TimeSpan.Zero,
+            Duration = TimeSpan.Zero
+        });
+    }
+
+    private static string DescribeBluRayTitle(BluRayTitle title)
+    {
+        var parts = new List<string>(3);
+        if (!string.IsNullOrWhiteSpace(title.Playlist)) parts.Add(title.Playlist!);
+        if (title.Duration > TimeSpan.Zero) parts.Add(FormatDuration(title.Duration));
+        if (title.ChapterCount > 0) parts.Add($"{title.ChapterCount} chapters");
+        return parts.Count > 0 ? string.Join(", ", parts) : "no identifying metadata";
     }
 
     public async Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(DiscSource disc, CancellationToken cancellationToken = default)
@@ -1442,6 +1677,17 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                     };
 
                     if (next != Snapshot) SetSnapshot(next);
+
+                    if (fileLoaded && _bluRayVerificationPending)
+                    {
+                        // Consume the pending verification only for the load it belongs to;
+                        // a superseding load (different source) discards it silently.
+                        var verify = string.Equals(Snapshot.Source, _bluRayVerificationSource, StringComparison.Ordinal);
+                        _bluRayVerificationPending = false;
+                        _bluRayVerificationSource = null;
+                        if (verify)
+                            await VerifyLoadedBluRayTitleAsync(_context, cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {

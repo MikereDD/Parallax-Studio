@@ -60,7 +60,8 @@ internal static partial class Program
             ("service: cancelled replacement leaves no host running", ServiceCancelledReplacementAsync),
             ("service: dispose with a hung host is bounded", ServiceDisposeHungHostAsync),
             ("service: toggle pause without active media is a no-op", ServiceTogglePauseWithoutMediaIsNoOpAsync),
-            .. TitleMatchingChecks
+            .. TitleMatchingChecks,
+            .. BluRayResolutionChecks
         ];
 
         var filter = args.FirstOrDefault();
