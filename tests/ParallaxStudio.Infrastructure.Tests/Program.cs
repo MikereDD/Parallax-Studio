@@ -61,7 +61,8 @@ internal static partial class Program
             ("service: dispose with a hung host is bounded", ServiceDisposeHungHostAsync),
             ("service: toggle pause without active media is a no-op", ServiceTogglePauseWithoutMediaIsNoOpAsync),
             .. TitleMatchingChecks,
-            .. BluRayResolutionChecks
+            .. BluRayResolutionChecks,
+            .. OpticalActiveStateChecks
         ];
 
         var filter = args.FirstOrDefault();

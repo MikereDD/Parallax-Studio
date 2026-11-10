@@ -490,6 +490,13 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         return parts.Count > 0 ? string.Join(", ", parts) : "no identifying metadata";
     }
 
+    // A discovered title may only be reported as actively playing while playback is
+    // genuinely live. StopAsync keeps the previous Source on the stopped snapshot, so
+    // the state check is what prevents a stale PLAYING badge after stop or fault.
+    internal static bool HasLiveOpticalPlayback(PlaybackSnapshot snapshot, string sourcePrefix) =>
+        snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused &&
+        snapshot.Source?.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) == true;
+
     public async Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(DiscSource disc, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(disc);
@@ -501,7 +508,8 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         var wasCurrentDisc = string.Equals(_loadedBluRayCacheKey, cacheKey, StringComparison.OrdinalIgnoreCase);
         _activeBluRayDevice = device;
 
-        var active = wasCurrentDisc ? _activeBluRayTitleIndex : -1;
+        var hasLiveDiscPlayback = wasCurrentDisc && HasLiveOpticalPlayback(Snapshot, "Blu-ray disc");
+        var active = hasLiveDiscPlayback ? _activeBluRayTitleIndex : -1;
         var count = 0;
 
         IReadOnlyList<BluRayTitle> discovered;
@@ -532,8 +540,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 .ToArray();
         }
 
-        if (active < 0 && wasCurrentDisc &&
-            Snapshot.Source?.StartsWith("Blu-ray disc", StringComparison.OrdinalIgnoreCase) == true)
+        if (active < 0 && hasLiveDiscPlayback)
         {
             active = discovered.OrderByDescending(title => title.Duration).First().Index;
             _activeBluRayTitleIndex = active;
@@ -706,7 +713,8 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         var wasCurrentDisc = string.Equals(_loadedDvdCacheKey, cacheKey, StringComparison.OrdinalIgnoreCase);
         _activeDvdDevice = device;
 
-        var active = wasCurrentDisc ? _activeDvdTitleIndex : -1;
+        var hasLiveDiscPlayback = wasCurrentDisc && HasLiveOpticalPlayback(Snapshot, "DVD disc");
+        var active = hasLiveDiscPlayback ? _activeDvdTitleIndex : -1;
         var count = 0;
 
         IReadOnlyList<BluRayTitle> discovered;
@@ -747,8 +755,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 .ToArray();
         }
 
-        if (active < 0 && wasCurrentDisc &&
-            Snapshot.Source?.StartsWith("DVD disc", StringComparison.OrdinalIgnoreCase) == true)
+        if (active < 0 && hasLiveDiscPlayback)
         {
             active = discovered.OrderByDescending(title => title.Duration).First().Index;
             _activeDvdTitleIndex = active;
@@ -1371,9 +1378,11 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        var previous = Snapshot;
         if (_usingDvdHost && _dvdHost is { IsActive: true })
         {
             await _dvdHost.StopAsync(cancellationToken).ConfigureAwait(false);
+            await LogPlaybackStoppedAsync(previous, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -1388,6 +1397,20 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 Duration = TimeSpan.Zero
             });
         }, cancellationToken).ConfigureAwait(false);
+        await LogPlaybackStoppedAsync(previous, cancellationToken).ConfigureAwait(false);
+    }
+
+    // Stop is a deliberate user (or UI-flow) action, never a poll-loop event, so one
+    // INFO line with the previous context is safe and useful for diagnostics.
+    private async Task LogPlaybackStoppedAsync(PlaybackSnapshot previous, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(previous.Source) &&
+            previous.State is not (PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused))
+            return;
+
+        await logger.InfoAsync(
+            $"Playback stopped: source={previous.Source ?? "none"}, title={previous.Title}, previous state={previous.State}.",
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SeekRelativeAsync(double seconds, CancellationToken cancellationToken = default)

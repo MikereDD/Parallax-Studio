@@ -1605,6 +1605,17 @@ public sealed class MainViewModel : ObservableObject
             }
             UpdateCinemaSidebarState();
 
+            // A stop/fault transition must not leave a stale PLAYING badge or banner in
+            // the optical title browser. This re-reads cached metadata through the
+            // playback service; it never starts a disc scan.
+            if (snapshot.State is PlaybackState.Stopped or PlaybackState.Idle or PlaybackState.Faulted &&
+                previousState is not (PlaybackState.Stopped or PlaybackState.Idle or PlaybackState.Faulted) &&
+                IsBluRayPanelOpen && _activeDisc is not null &&
+                BluRayTitles.Any(title => title.IsActive))
+            {
+                _ = RefreshBluRayTitlesAsync(cancellationToken: CancellationToken.None);
+            }
+
             if (_activeResumePath is not null &&
                 snapshot.State is PlaybackState.Playing or PlaybackState.Paused)
             {
@@ -1796,7 +1807,11 @@ public sealed class MainViewModel : ObservableObject
             // Never crawl a physical optical disc for art. Local files keep the v3
             // same-basename/poster/folder/cover priority before any network lookup.
             if (MediaPresentation.SourceKind(source) == "Local file")
+            {
                 artwork = await _artworkService.LoadAsync(source, cancellationToken);
+                if (artwork is not null)
+                    await _logger.InfoAsync($"Artwork: using local artwork for '{title}'.");
+            }
 
             if (artwork is null)
             {
@@ -1812,7 +1827,8 @@ public sealed class MainViewModel : ObservableObject
                     _settings.OnlineArtworkEnabled,
                     _settings.CacheOnlineArtwork,
                     cancellationToken,
-                    tmdbDuration);
+                    tmdbDuration,
+                    message => _logger.InfoAsync(message));
             }
 
             if (!_shutdown &&
