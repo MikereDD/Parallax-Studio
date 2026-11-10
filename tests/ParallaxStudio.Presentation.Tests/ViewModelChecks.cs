@@ -4,9 +4,11 @@ using System.Reflection;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using ParallaxStudio.App;
+using ParallaxStudio.App.Common;
 using ParallaxStudio.App.Services;
 using ParallaxStudio.App.ViewModels;
 using ParallaxStudio.Core.Enums;
@@ -117,6 +119,117 @@ internal static class ViewModelChecks
             backend.Publish(Playing("DVD disc • E:\\ • DVD title 4", "Disc — Program"));
             await Task.Delay(250);
             Check(vm.SourceText == "DVD · E:\\ · DVD title 4", "DVD presentation must use the backend's reconciled title number");
+
+            // The transport action label must follow the real playback state: Pause only
+            // while playing or loading (the backend is unpaused and will play), Play for
+            // everything else. A stopped or faulted player must never offer "Pause".
+            backend.Publish(Playing(first, "First film"));
+            Check(vm.PlayPauseText == "Pause", "Playing must offer the Pause action");
+            backend.Publish(Playing(first, "First film") with { State = PlaybackState.Paused });
+            Check(vm.PlayPauseText == "Play", "Paused must offer the Play action");
+            backend.Publish(Playing(first, "First film") with { State = PlaybackState.Loading });
+            Check(vm.PlayPauseText == "Pause", "Loading must offer the upcoming Pause action");
+            backend.Publish(Playing(first, "First film") with { State = PlaybackState.Stopped });
+            Check(vm.PlayPauseText == "Play", "Stopped must not offer Pause");
+            backend.Publish(Playing(first, "First film") with { State = PlaybackState.Faulted });
+            Check(vm.PlayPauseText == "Play", "Faulted must not offer Pause");
+
+            // A Blu-ray title genuinely named "The Road" must display its real name;
+            // disc-specific suppressions are not allowed. Generic fallbacks stay unchanged.
+            var roadTitle = new BluRayTitle(0, false, TimeSpan.FromMinutes(111), Name: "The Road", IsLikelyMainFeature: true);
+            Check(roadTitle.PrimaryText == "The Road", "A Blu-ray title genuinely named The Road must display its real name");
+            var unnamedMainFeature = new BluRayTitle(0, false, TimeSpan.FromMinutes(111), IsLikelyMainFeature: true);
+            Check(unnamedMainFeature.PrimaryText == "Blu-ray Main Feature", "Unnamed Blu-ray main-feature fallback must remain unchanged");
+            var dvdFeature = new BluRayTitle(2, false, TimeSpan.FromMinutes(95), SourceKind: DiscKind.Dvd, IsLikelyMainFeature: true);
+            Check(dvdFeature.PrimaryText == $"Feature / Long Program — {dvdFeature.DurationText}",
+                "DVD title presentation must remain unchanged");
+
+            // Switching to a local file must not leave the previous disc's titles,
+            // selection, or browser panel behind.
+            var staleTitle = new BluRayTitle(1, false, TimeSpan.FromMinutes(44));
+            vm.BluRayTitles.Add(staleTitle);
+            vm.SelectedBluRayTitle = staleTitle;
+            vm.IsBluRayPanelOpen = true;
+            backend.Publish(Playing(first, "First film"));
+            await vm.OpenPathAsync(first);
+            Check(vm.BluRayTitles.Count == 0 && vm.SelectedBluRayTitle is null && !vm.IsBluRayPanelOpen,
+                "Opening a local file must clear stale optical titles, selection, and the title browser");
+
+            // A stop/fault transition must clear the title browser's PLAYING badge and
+            // banner without discarding discovered titles (Phase 5 regression). The double
+            // mirrors the service contract: live playback reports one active title, a
+            // stopped snapshot reports none.
+            var bluRayDisc = new DiscSource(@"E:\", "THE_ROAD", DiscKind.BluRay, true);
+            IReadOnlyList<BluRayTitle> roadActive =
+            [
+                new BluRayTitle(0, true, TimeSpan.FromMinutes(111), ChapterCount: 16, Playlist: "00004.mpls", Name: "The Road", IsLikelyMainFeature: true),
+                new BluRayTitle(1, false, TimeSpan.FromMinutes(20), Playlist: "00010.mpls", Name: "The Road")
+            ];
+            backend.LibMmbdAvailable = true;
+            backend.TitlesToReturn = roadActive;
+            vm.BrowseDiscTitlesCommand.Execute(bluRayDisc);
+            for (var attempt = 0; attempt < 100 && (vm.BluRayTitles.Count == 0 || vm.IsBluRayTitleDiscoveryBusy); attempt++) await Task.Delay(25);
+            Check(vm.IsBluRayPanelOpen && vm.BluRayTitles.Count == 2, "Blu-ray browse must populate the title browser");
+            Check(vm.BluRayTitles.Count(title => title.IsActive) == 1 && vm.BluRayTitleSummary.Contains("is playing"),
+                "A live Blu-ray title must show the PLAYING badge and banner");
+            backend.TitlesToReturn = roadActive.Select(title => title with { IsActive = false }).ToArray();
+            backend.Publish(Playing(@"Blu-ray disc • E:\ • title 1", "The Road — Title 1") with { State = PlaybackState.Stopped });
+            for (var attempt = 0; attempt < 100 && vm.BluRayTitles.Any(title => title.IsActive); attempt++) await Task.Delay(25);
+            Check(vm.BluRayTitles.Count == 2, "Blu-ray stop must keep the discovered titles");
+            Check(!vm.BluRayTitles.Any(title => title.IsActive), "Blu-ray stop must clear the stale PLAYING badge");
+            Check(!vm.BluRayTitleSummary.Contains("is playing"), "Blu-ray stop must clear the playing claim from the banner");
+            Check(vm.BluRayTitleSummary.Contains("2 titles discovered"), "The banner must keep the discovery metadata after stop");
+            Check(vm.SelectedBluRayTitle is not null, "Selection may remain after stop");
+
+            // Reopening playback must identify the correct active title again.
+            backend.TitlesToReturn = roadActive;
+            backend.Publish(Playing(@"Blu-ray disc • E:\ • title 1", "The Road — Title 1"));
+            vm.BrowseDiscTitlesCommand.Execute(bluRayDisc);
+            for (var attempt = 0; attempt < 100 && !vm.BluRayTitles.Any(title => title.IsActive); attempt++) await Task.Delay(25);
+            Check(vm.BluRayTitles.Count(title => title.IsActive) == 1 && vm.BluRayTitleSummary.Contains("is playing"),
+                "Reopened playback must identify the active Blu-ray title again");
+
+            // The DVD browser shares the panel; a reconciled, verified mapping carries the
+            // PLAYING badge and matched banner, and stop must clear both.
+            var dvdDisc = new DiscSource(@"D:\", "DR_WHO_D13", DiscKind.Dvd, true);
+            backend.TitlesToReturn =
+            [
+                new BluRayTitle(0, false, TimeSpan.FromMinutes(24), SourceKind: DiscKind.Dvd, IsLikelyEpisode: true),
+                new BluRayTitle(2, true, TimeSpan.FromMinutes(95), SourceKind: DiscKind.Dvd, IsLikelyMainFeature: true,
+                    DvdPlaybackTitleNumber: 7, IsDvdMappingVerified: true)
+            ];
+            vm.BrowseDiscTitlesCommand.Execute(dvdDisc);
+            for (var attempt = 0; attempt < 120 && !vm.BluRayTitleSummary.Contains("matched title"); attempt++) await Task.Delay(25);
+            Check(vm.BluRayTitles.Count(title => title.IsActive) == 1 && vm.BluRayTitleSummary.Contains("matched title"),
+                "A reconciled DVD title must show the PLAYING badge and matched banner");
+            backend.TitlesToReturn = backend.TitlesToReturn.Select(title => title with { IsActive = false }).ToArray();
+            backend.Publish(Playing(@"DVD disc • D:\ • DVD title 8", "DR_WHO_D13 — Program") with { State = PlaybackState.Stopped });
+            for (var attempt = 0; attempt < 100 && vm.BluRayTitles.Any(title => title.IsActive); attempt++) await Task.Delay(25);
+            Check(vm.BluRayTitles.Count == 2 && !vm.BluRayTitles.Any(title => title.IsActive),
+                "DVD stop must keep the discovered titles but clear the stale PLAYING badge");
+            Check(!vm.BluRayTitleSummary.Contains("matched title"), "DVD stop must clear the matched claim from the banner");
+
+            // The shared transport shortcuts drive the same commands from the main window
+            // and the floating fullscreen controls window.
+            var volumeBefore = vm.Volume;
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Up) && vm.Volume == Math.Min(100, volumeBefore + 5),
+                "Up must raise the volume by 5");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Down) && vm.Volume == volumeBefore,
+                "Down must lower the volume by 5");
+            vm.Volume = 100;
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Up) && vm.Volume == 100, "Volume must clamp at 100");
+            vm.Volume = 0;
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Down) && vm.Volume == 0, "Volume must clamp at 0");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Space), "Space must be handled");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Left), "Left must be handled");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Right), "Right must be handled");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.M), "M must be handled");
+            Check(!vm.IsFullscreen && TransportKeyboardShortcuts.TryHandle(vm, Key.F) && vm.IsFullscreen,
+                "F must enter fullscreen");
+            Check(TransportKeyboardShortcuts.TryHandle(vm, Key.Escape) && !vm.IsFullscreen,
+                "Escape must leave fullscreen when enabled");
+            Check(!TransportKeyboardShortcuts.TryHandle(vm, Key.Escape), "Escape outside fullscreen is not a transport key");
+            Check(!TransportKeyboardShortcuts.TryHandle(vm, Key.A), "Unrelated keys must not be handled");
 
             var previewIndex = Array.IndexOf(args, "--preview");
             await RenderChecksAsync(vm, backend, previewIndex >= 0 && previewIndex + 1 < args.Length
@@ -243,6 +356,8 @@ public class PlaybackDouble : DispatchProxy
     public Task<IReadOnlyList<MediaTrack>>? NextTrackRead { get; set; }
     public Exception? OpenFailure { get; set; }
     public int DiscoveryCalls { get; private set; }
+    public IReadOnlyList<BluRayTitle> TitlesToReturn { get; set; } = [];
+    public bool LibMmbdAvailable { get; set; }
     public void Publish(PlaybackSnapshot snapshot) { Snapshot = snapshot; _changed?.Invoke(this, new(snapshot)); }
     protected override object? Invoke(MethodInfo? method, object?[]? args)
     {
@@ -255,7 +370,7 @@ public class PlaybackDouble : DispatchProxy
             case "get_BackendDescription": return "Presentation test double";
             case "get_LastPlaybackError": return null;
             case "get_DiscDecryptionProvider": return "Test double";
-            case "IsMakeMkvLibMmbdAvailable": return false;
+            case "IsMakeMkvLibMmbdAvailable": return LibMmbdAvailable;
             case "ProbeAsync": return Task.FromResult(new PlaybackBackendStatus(false, "Presentation tests"));
             case "GetTracksAsync":
                 var pending = NextTrackRead;
@@ -263,7 +378,7 @@ public class PlaybackDouble : DispatchProxy
                 return pending ?? Task.FromResult(Tracks);
             case "GetChaptersAsync": return Task.FromResult<IReadOnlyList<MediaChapter>>([]);
             case "GetBluRayTitlesAsync": case "GetDvdTitlesAsync":
-                DiscoveryCalls++; return Task.FromResult<IReadOnlyList<BluRayTitle>>([]);
+                DiscoveryCalls++; return Task.FromResult(TitlesToReturn);
             case "OpenFileAsync": return OpenFailure is null ? Task.CompletedTask : Task.FromException(OpenFailure);
             case "DisposeAsync": return ValueTask.CompletedTask;
             default:

@@ -655,7 +655,12 @@ public sealed class MainViewModel : ObservableObject
     {
         try
         {
+            CancelBluRayTitleDiscovery();
             _activeDisc = null;
+            IsBluRayPanelOpen = false;
+            BluRayTitles.Clear();
+            SelectedBluRayTitle = null;
+            BluRayTitleSummary = "Select a Blu-ray or DVD to discover titles, episodes, playlists, and extras.";
             _settings.LastOpenDirectory = Path.GetDirectoryName(path);
             _activeResumePath = Path.GetFullPath(path);
             _lastResumePersistUtc = DateTimeOffset.MinValue;
@@ -920,21 +925,9 @@ public sealed class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            if (disc.Kind == DiscKind.Dvd && ex.Message.Contains("isolated native probe failed", StringComparison.OrdinalIgnoreCase))
-            {
-                StatusText = ex.Message;
-                MessageBox.Show(
-                    ex.Message,
-                    "DVD playback safety check failed",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-            }
-            else
-            {
-                StatusText = disc.Kind == DiscKind.BluRay
-                    ? "Blu-ray could not be opened. The disc may require AACS keys or unsupported protection."
-                    : "DVD could not be opened. Check libdvdcss availability and the playback log.";
-            }
+            StatusText = disc.Kind == DiscKind.BluRay
+                ? "Blu-ray could not be opened. The disc may require AACS keys or unsupported protection."
+                : "DVD could not be opened. Check libdvdcss availability and the playback log.";
             await _logger.ErrorAsync($"Could not open {disc.KindLabel} from {disc.DriveRoot}", ex);
         }
     }
@@ -1074,19 +1067,7 @@ public sealed class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            if (_activeDisc.Kind == DiscKind.Dvd && ex.Message.Contains("isolated native probe failed", StringComparison.OrdinalIgnoreCase))
-            {
-                StatusText = ex.Message;
-                MessageBox.Show(
-                    ex.Message,
-                    "DVD playback safety check failed",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-            }
-            else
-            {
-                StatusText = $"{_activeDisc.KindLabel} title {title.DisplayNumber} could not be opened.";
-            }
+            StatusText = $"{_activeDisc.KindLabel} title {title.DisplayNumber} could not be opened.";
             await _logger.ErrorAsync(StatusText, ex);
         }
     }
@@ -1597,7 +1578,9 @@ public sealed class MainViewModel : ObservableObject
             DurationSeconds = snapshot.Duration.TotalSeconds;
             if (!IsScrubbing) ScrubPosition = snapshot.Position.TotalSeconds;
             IsMuted = snapshot.IsMuted;
-            PlayPauseText = snapshot.State == PlaybackState.Paused ? "Play" : "Pause";
+            // Loading shows "Pause": the backend was left unpaused, so playback will begin
+            // once the load completes and pausing is the action the button would take.
+            PlayPauseText = snapshot.State is PlaybackState.Playing or PlaybackState.Loading ? "Pause" : "Play";
             UpdateMediaPresentation(snapshot);
 
             // Refresh on the first usable snapshot, even if the title browser is closed.
@@ -1621,6 +1604,17 @@ public sealed class MainViewModel : ObservableObject
                 _sidebarHiddenOverride = null;
             }
             UpdateCinemaSidebarState();
+
+            // A stop/fault transition must not leave a stale PLAYING badge or banner in
+            // the optical title browser. This re-reads cached metadata through the
+            // playback service; it never starts a disc scan.
+            if (snapshot.State is PlaybackState.Stopped or PlaybackState.Idle or PlaybackState.Faulted &&
+                previousState is not (PlaybackState.Stopped or PlaybackState.Idle or PlaybackState.Faulted) &&
+                IsBluRayPanelOpen && _activeDisc is not null &&
+                BluRayTitles.Any(title => title.IsActive))
+            {
+                _ = RefreshBluRayTitlesAsync(cancellationToken: CancellationToken.None);
+            }
 
             if (_activeResumePath is not null &&
                 snapshot.State is PlaybackState.Playing or PlaybackState.Paused)
@@ -1813,7 +1807,11 @@ public sealed class MainViewModel : ObservableObject
             // Never crawl a physical optical disc for art. Local files keep the v3
             // same-basename/poster/folder/cover priority before any network lookup.
             if (MediaPresentation.SourceKind(source) == "Local file")
+            {
                 artwork = await _artworkService.LoadAsync(source, cancellationToken);
+                if (artwork is not null)
+                    await _logger.InfoAsync($"Artwork: using local artwork for '{title}'.");
+            }
 
             if (artwork is null)
             {
@@ -1829,7 +1827,8 @@ public sealed class MainViewModel : ObservableObject
                     _settings.OnlineArtworkEnabled,
                     _settings.CacheOnlineArtwork,
                     cancellationToken,
-                    tmdbDuration);
+                    tmdbDuration,
+                    message => _logger.InfoAsync(message));
             }
 
             if (!_shutdown &&

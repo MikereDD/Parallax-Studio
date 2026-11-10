@@ -6,7 +6,7 @@
         WindowStyle="None" ResizeMode="NoResize"
         AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" ShowActivated="False" Topmost="True"
-        Focusable="False">
+        Focusable="False" KeyDown="FullscreenControls_KeyDown">
     <Border Style="{StaticResource TransportBorder}" Padding="{DynamicResource StudioFloatingTransportPadding}" Margin="10">
         <Grid>
             <Grid.ColumnDefinitions>
@@ -34,6 +34,9 @@
                         Minimum="0" Maximum="{Binding DurationSeconds}"
                         Value="{Binding ScrubPosition, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                         PreviewMouseLeftButtonDown="TimelineSlider_PreviewMouseLeftButtonDown"
+                        PreviewKeyDown="TimelineSlider_PreviewKeyDown"
+                        KeyUp="TimelineSlider_KeyUp"
+                        LostKeyboardFocus="TimelineSlider_LostKeyboardFocus"
                         primitives:Thumb.DragStarted="TimelineSlider_DragStarted"
                         primitives:Thumb.DragCompleted="TimelineSlider_DragCompleted"
                         ToolTip="Seek" />

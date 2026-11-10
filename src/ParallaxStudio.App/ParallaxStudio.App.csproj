@@ -8,8 +8,8 @@
     <ApplicationIcon>Assets\parallax-studio.ico</ApplicationIcon>
     <Version>1.0.0</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.5550</FileVersion>
-    <InformationalVersion>1.0-dev.5.5.5</InformationalVersion>
+    <FileVersion>1.0.0.5560</FileVersion>
+    <InformationalVersion>1.0-dev.5.5.6</InformationalVersion>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
@@ -20,7 +20,28 @@
   <ItemGroup>
     <Resource Include="Assets\parallax-studio-icon-256.png" />
   </ItemGroup>
+  <PropertyGroup>
+    <!-- Mirrors build.ps1's $appOutput. Used to detect a staged MakeMKV LibMMBD provider. -->
+    <_AppRuntimeOutput>$(MSBuildProjectDirectory)\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\</_AppRuntimeOutput>
+    <IncrementalCleanDependsOn>ProtectStagedLibMmbdAliases;$(IncrementalCleanDependsOn)</IncrementalCleanDependsOn>
+  </PropertyGroup>
   <ItemGroup Condition="Exists('..\..\native')">
-    <Content Include="..\..\native\*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\native\*.dll" Exclude="..\..\native\libaacs.dll;..\..\native\libbdplus.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- build.ps1 stages MakeMKV LibMMBD under the libaacs.dll/libbdplus.dll names and writes a
+         libmmbd.staged marker beside them. While the marker exists, a plain dotnet build must not
+         overwrite the staged provider with the standard libraries. Removing the marker (or
+         cleaning) restores the standard libraries on the next build. -->
+    <Content Include="..\..\native\libaacs.dll" Condition="Exists('..\..\native\libaacs.dll') and !Exists('$(_AppRuntimeOutput)libmmbd.staged')" Link="libaacs.dll" CopyToOutputDirectory="Always" />
+    <Content Include="..\..\native\libbdplus.dll" Condition="Exists('..\..\native\libbdplus.dll') and !Exists('$(_AppRuntimeOutput)libmmbd.staged')" Link="libbdplus.dll" CopyToOutputDirectory="Always" />
   </ItemGroup>
+  <!-- While the marker exists the aliases are no longer Content outputs; register them as file
+       writes so IncrementalClean does not delete the staged provider as an orphaned write. -->
+  <Target Name="ProtectStagedLibMmbdAliases" Condition="Exists('$(OutDir)libmmbd.staged')">
+    <ItemGroup>
+      <FileWrites Include="$(OutDir)libaacs.dll;$(OutDir)libbdplus.dll;$(OutDir)libmmbd64.dll;$(OutDir)libaacs.standard.dll;$(OutDir)libbdplus.standard.dll;$(OutDir)libmmbd.staged" />
+    </ItemGroup>
+  </Target>
+  <Target Name="RemoveStagedLibMmbdOnClean" AfterTargets="Clean">
+    <Delete Files="$(OutDir)libmmbd.staged;$(OutDir)libmmbd64.dll;$(OutDir)libaacs.standard.dll;$(OutDir)libbdplus.standard.dll;$(OutDir)libaacs.dll;$(OutDir)libbdplus.dll" />
+  </Target>
 </Project>

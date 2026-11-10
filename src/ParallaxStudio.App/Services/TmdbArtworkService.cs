@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -241,7 +242,8 @@ public sealed class TmdbArtworkService
         bool onlineEnabled,
         bool cacheEnabled,
         CancellationToken cancellationToken = default,
-        TimeSpan? playbackDuration = null)
+        TimeSpan? playbackDuration = null,
+        Func<string, Task>? log = null)
     {
         if (!onlineEnabled) return null;
 
@@ -260,7 +262,10 @@ public sealed class TmdbArtworkService
                     cancellationToken).ConfigureAwait(false);
 
                 if (runtimeCached is not null)
+                {
+                    await LogAsync(log, $"Artwork: TMDB cache hit for '{query.Title}' (runtime-disambiguated).").ConfigureAwait(false);
                     return runtimeCached;
+                }
             }
 
             var cached = await LoadCachedAsync(
@@ -268,10 +273,17 @@ public sealed class TmdbArtworkService
                 cancellationToken).ConfigureAwait(false);
 
             if (cached is not null)
+            {
+                await LogAsync(log, $"Artwork: TMDB cache hit for '{query.Title}'.").ConfigureAwait(false);
                 return cached;
+            }
         }
 
-        if (!IsConfigured) return null;
+        if (!IsConfigured)
+        {
+            await LogAsync(log, $"Artwork: TMDB lookup unavailable for '{query.Title}'; continuing without online artwork.").ConfigureAwait(false);
+            return null;
+        }
 
         try
         {
@@ -279,6 +291,7 @@ public sealed class TmdbArtworkService
             var movieMatches = EligibleExactCandidates(query, movieCandidates);
             var match = SelectBestCandidate(query, movieCandidates);
             var resolvedByRuntime = false;
+            var resolvedByBoxSet = false;
 
             if (match is null && movieMatches.Length > 0)
             {
@@ -294,7 +307,10 @@ public sealed class TmdbArtworkService
             // Movie candidates existed but could not be resolved uniquely.
             // Do not turn a movie ambiguity into an unrelated TV match.
             if (match is null && movieMatches.Length > 0)
+            {
+                await LogAsync(log, $"Artwork: TMDB lookup for '{query.Title}' refused: {movieMatches.Length} eligible movie candidates could not be resolved uniquely.").ConfigureAwait(false);
                 return null;
+            }
 
             if (match is null)
             {
@@ -307,9 +323,14 @@ public sealed class TmdbArtworkService
                         source,
                         playbackTitle,
                         cancellationToken).ConfigureAwait(false);
+                    resolvedByBoxSet = match is not null;
                 }
 
-                if (match is null) return null;
+                if (match is null)
+                {
+                    await LogAsync(log, $"Artwork: TMDB lookup for '{query.Title}' found no eligible match; no poster applied.").ConfigureAwait(false);
+                    return null;
+                }
             }
 
             if (string.IsNullOrWhiteSpace(match.PosterPath)) return null;
@@ -337,6 +358,13 @@ public sealed class TmdbArtworkService
                     cancellationToken).ConfigureAwait(false);
             }
 
+            var resolution = resolvedByRuntime
+                ? "runtime-disambiguated"
+                : resolvedByBoxSet
+                    ? "TV box-set match"
+                    : "direct match";
+            var year = match.Year?.ToString(CultureInfo.InvariantCulture) ?? "year unknown";
+            await LogAsync(log, $"Artwork: TMDB selected '{match.Title}' ({year}, {resolution}) for '{query.Title}'.").ConfigureAwait(false);
             return image;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -348,9 +376,15 @@ public sealed class TmdbArtworkService
                                    NotSupportedException or ArgumentException)
         {
             // Online artwork is optional. Failure must not affect playback.
+            await LogAsync(log, $"Artwork: TMDB lookup for '{query.Title}' failed gracefully ({ex.GetType().Name}); continuing without online artwork.").ConfigureAwait(false);
             return null;
         }
     }
+
+    // Kept as a plain delegate so the isolated TMDB test project, which compiles this
+    // file without a ParallaxStudio.Core reference, stays dependency-free.
+    private static Task LogAsync(Func<string, Task>? log, string message) =>
+        log?.Invoke(message) ?? Task.CompletedTask;
 
     public static TmdbArtworkCandidate? SelectBestCandidate(
         TmdbArtworkQuery query,

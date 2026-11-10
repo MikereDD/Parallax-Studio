@@ -15,19 +15,29 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private int _activeBluRayTitleIndex = -1;
     private string? _loadedBluRayCacheKey;
     private readonly Dictionary<string, IReadOnlyList<BluRayTitle>> _bluRayTitleCache = new(StringComparer.OrdinalIgnoreCase);
+    // libbluray edition list per disc (session-scoped), probed headlessly the first time
+    // an indexed Blu-ray title is requested; the basis for evidence-based title mapping.
+    private readonly Dictionary<string, IReadOnlyList<BluRayEditionInfo>> _bluRayEditionCache = new(StringComparer.OrdinalIgnoreCase);
+    // Post-load verification state for indexed Blu-ray playback (refusal-over-guess).
+    private BluRayTitle? _requestedBluRayTitle;
+    private int _activeBluRayEditionSelector = -1;
+    private bool _bluRayVerificationPending;
+    private string? _bluRayVerificationSource;
     private string? _activeDvdDevice;
     private int _activeDvdTitleIndex = -1;
     private string? _loadedDvdCacheKey;
     private readonly Dictionary<string, IReadOnlyList<BluRayTitle>> _dvdTitleCache = new(StringComparer.OrdinalIgnoreCase);
-    private int _pendingDvdEditionIndex = -1;
-    private bool _pendingDvdEditionSwitchIssued;
-    private readonly HashSet<string> _dvdProbePassCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dvdFullMapCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<int, int>> _dvdPlaybackTitleByMetadataIndex = new(StringComparer.OrdinalIgnoreCase);
     // Per-disc outcome of the last full title map (unique, ambiguous, unmatched per title),
     // kept so a refused title can say why. Guarded by _dvdMappingSync.
     private readonly Dictionary<string, DvdTitleMapResult> _dvdTitleMapResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _dvdMappingSync = new();
+    // Optical identities logged once per session; insufficient identities are made unique
+    // per establishment so stale caches can never be reused across an indistinguishable
+    // media transition.
+    private readonly HashSet<string> _establishedOpticalIdentities = new(StringComparer.OrdinalIgnoreCase);
+    private int _insufficientIdentitySequence;
     private DvdPlaybackHostClient? _dvdHost;
     private bool _usingDvdHost;
     // Ownership of DVD host routing. Every claim of (or release from) the DVD host path
@@ -184,7 +194,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
             _activeBluRayDevice = device;
-            _loadedBluRayCacheKey = BuildDiscCacheKey(disc);
+            _loadedBluRayCacheKey = EstablishDiscIdentity(disc);
             _activeBluRayTitleIndex = _bluRayTitleCache.TryGetValue(_loadedBluRayCacheKey, out var cachedBluRayTitles) && cachedBluRayTitles.Count > 0
                 ? cachedBluRayTitles.OrderByDescending(title => title.Duration).First().Index
                 : -1;
@@ -230,23 +240,58 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         try
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+            var cacheKey = EstablishDiscIdentity(disc);
+
+            if (!_bluRayTitleCache.TryGetValue(cacheKey, out var titles))
+            {
+                titles = await DiscoverTitlesWithMakeMkvAsync(disc, cancellationToken).ConfigureAwait(false);
+                if (titles.Count > 0)
+                    _bluRayTitleCache[cacheKey] = titles;
+            }
+
+            var requested = titles.FirstOrDefault(title => title.Index == titleIndex)
+                ?? throw new InvalidOperationException($"Blu-ray title {titleIndex + 1} is not present in the current disc metadata.");
+
+            var editions = await EnsureBluRayEditionMapAsync(disc, cacheKey, cancellationToken).ConfigureAwait(false);
+            var resolution = BluRayEditionResolver.Resolve(requested, editions);
+            if (!resolution.IsResolved)
+            {
+                await logger.InfoAsync(
+                    $"Blu-ray title {titleIndex + 1} refused for {device}: {resolution.Detail}.",
+                    cancellationToken).ConfigureAwait(false);
+                throw new OpticalTitleUnavailableException(
+                    $"Parallax could not confidently match Blu-ray title {titleIndex + 1} " +
+                    $"({DescribeBluRayTitle(requested)}) to a libbluray edition: {resolution.Detail}. " +
+                    "The title was not started rather than risking playback of the wrong program.");
+            }
+
             _activeBluRayDevice = device;
-            _loadedBluRayCacheKey = BuildDiscCacheKey(disc);
+            _loadedBluRayCacheKey = cacheKey;
             _activeBluRayTitleIndex = titleIndex;
+            _requestedBluRayTitle = requested;
+            _activeBluRayEditionSelector = resolution.Selector;
+            _bluRayVerificationPending = true;
+            _bluRayVerificationSource = $"Blu-ray disc • {device} • title {titleIndex + 1}";
             LastPlaybackError = null;
+
+            await logger.InfoAsync(
+                $"Blu-ray title resolved: MakeMKV title {requested.DisplayNumber} ({DescribeBluRayTitle(requested)}) -> " +
+                $"libbluray edition {resolution.Selector} (title {resolution.Selector + 1}) by {resolution.Detail}; playing bd://{resolution.Selector}.",
+                cancellationToken).ConfigureAwait(false);
+
             await WithInitializedContextAsync(context =>
             {
                 SetSnapshot(Snapshot with
                 {
                     State = PlaybackState.Loading,
-                    Source = $"Blu-ray disc • {device} • title {titleIndex + 1}",
+                    Source = _bluRayVerificationSource,
                     Title = $"{CleanDiscTitle(disc.DisplayName, device)} — Title {titleIndex + 1}",
                     Position = TimeSpan.Zero,
                     Duration = TimeSpan.Zero
                 });
 
                 _library.SetProperty(context, "bluray-device", device);
-                _library.Command(context, "loadfile", $"bd://{titleIndex}", "replace");
+                _library.Command(context, "loadfile", $"bd://{resolution.Selector}", "replace");
                 _paused = false;
             }, cancellationToken).ConfigureAwait(false);
 
@@ -258,6 +303,205 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         }
     }
 
+    /// <summary>
+    /// Returns the libbluray edition list for the disc, probing it headlessly on first
+    /// use. The probe is the only trustworthy source of libbluray title indices; without
+    /// it, indexed playback cannot be verified and the caller must refuse.
+    /// </summary>
+    private async Task<IReadOnlyList<BluRayEditionInfo>> EnsureBluRayEditionMapAsync(
+        DiscSource disc,
+        string cacheKey,
+        CancellationToken cancellationToken)
+    {
+        if (_bluRayEditionCache.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
+        var editions = await Task.Run(
+                () => ProbeBluRayEditions(device, cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (editions.Count == 0)
+        {
+            throw new OpticalTitleUnavailableException(
+                "Parallax could not enumerate the disc's libbluray editions, so no Blu-ray title can be " +
+                "verified against the disc. The title was not started rather than risking playback of the wrong program.");
+        }
+
+        _bluRayEditionCache[cacheKey] = editions;
+        return editions;
+    }
+
+    /// <summary>
+    /// Headless equivalent of the DVD runtime probe: opens the disc on a scratch libmpv
+    /// context with no audio/video output and reads <c>edition-list</c> once the default
+    /// title has loaded. Runs on a thread-pool thread; returns an empty list on any
+    /// failure so the caller refuses instead of guessing.
+    /// </summary>
+    private IReadOnlyList<BluRayEditionInfo> ProbeBluRayEditions(string device, CancellationToken cancellationToken)
+    {
+        nint probe = nint.Zero;
+        try
+        {
+            ConfigureDiscDecryptionProvider();
+            if (!_library.TryLoad(out var loadError))
+            {
+                throw new InvalidOperationException(loadError ?? "libmpv could not be loaded.");
+            }
+
+            probe = _library.Create();
+            _library.SetOption(probe, "terminal", "no");
+            _library.SetOption(probe, "osc", "no");
+            _library.SetOption(probe, "idle", "yes");
+            _library.SetOption(probe, "keep-open", "no");
+            _library.SetOption(probe, "force-window", "no");
+            _library.SetOption(probe, "vo", "null");
+            _library.SetOption(probe, "ao", "null");
+            _library.SetOption(probe, "pause", "yes");
+            _library.Initialize(probe);
+            _library.SetProperty(probe, "bluray-device", device);
+            _library.Command(probe, "loadfile", "bd://", "replace");
+
+            var loaded = false;
+            string? failure = null;
+            var timeout = Stopwatch.StartNew();
+            while (!loaded && failure is null && timeout.Elapsed < TimeSpan.FromSeconds(90))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var item in _library.DrainEvents(probe))
+                {
+                    if (item.Kind == "file-loaded")
+                        loaded = true;
+                    else if (item.Kind == "end-file" && item.Level == "error")
+                        failure = item.Message;
+                }
+
+                if (!loaded && failure is null)
+                    Thread.Sleep(100);
+            }
+
+            if (!loaded)
+            {
+                logger.WarningAsync(
+                        $"Blu-ray edition probe for {device} did not load the disc " +
+                        (failure is not null ? $"({failure})" : $"(timeout after {timeout.Elapsed.TotalSeconds:0} s)") +
+                        "; indexed titles will be refused.",
+                        CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                return [];
+            }
+
+            var count = ParseInt(_library.GetProperty(probe, "edition-list/count"));
+            var editions = new List<BluRayEditionInfo>(count);
+            for (var index = 0; index < count; index++)
+            {
+                var prefix = $"edition-list/{index}/";
+                var selector = ParseInt(_library.GetProperty(probe, prefix + "id"), index);
+                var title = _library.GetProperty(probe, prefix + "title") ?? string.Empty;
+                var (duration, playlist) = BluRayEditionResolver.ParseEditionTitle(title);
+                editions.Add(new BluRayEditionInfo(selector, duration, playlist, title));
+            }
+
+            var withPlaylist = editions.Count(edition => !string.IsNullOrWhiteSpace(edition.Playlist));
+            logger.InfoAsync(
+                    $"Blu-ray edition map for {device}: {editions.Count} libbluray editions " +
+                    $"({withPlaylist} with playlist identity).",
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+            return editions;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.WarningAsync(
+                    $"Blu-ray edition probe for {device} failed: {ex.Message}. Indexed titles will be refused.",
+                    CancellationToken.None)
+                .GetAwaiter().GetResult();
+            return [];
+        }
+        finally
+        {
+            if (probe != nint.Zero)
+            {
+                try { _library.TerminateDestroy(probe); }
+                catch { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Post-load refusal-over-guess check for indexed Blu-ray playback: the content that
+    /// actually loaded must agree with the requested MakeMKV title on runtime (within
+    /// tolerance) and chapter count (exact, when known). A contradiction stops playback
+    /// rather than letting an unrelated title play silently.
+    /// </summary>
+    private async Task VerifyLoadedBluRayTitleAsync(nint context, CancellationToken cancellationToken)
+    {
+        var requested = _requestedBluRayTitle;
+        if (requested is null)
+            return;
+
+        var selector = _activeBluRayEditionSelector;
+        var actualDuration = ParseSeconds(_library.GetProperty(context, "duration"));
+        var actualChapterCount = ParseInt(_library.GetProperty(context, "chapter-list/count"), -1);
+
+        var durationOk = requested.Duration <= TimeSpan.Zero || actualDuration <= TimeSpan.Zero ||
+            (actualDuration - requested.Duration).Duration() <= BluRayEditionResolver.DurationTolerance;
+        var chaptersOk = requested.ChapterCount <= 0 || actualChapterCount < 0 ||
+            actualChapterCount == requested.ChapterCount;
+
+        if (durationOk && chaptersOk)
+        {
+            await logger.InfoAsync(
+                $"Blu-ray title reconciled: requested MakeMKV title {requested.DisplayNumber} ({DescribeBluRayTitle(requested)}), " +
+                $"libbluray edition {selector} (title {selector + 1}), actual runtime={FormatDuration(actualDuration)}, " +
+                $"chapters={actualChapterCount} — verified.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var detail =
+            $"requested MakeMKV title {requested.DisplayNumber} ({DescribeBluRayTitle(requested)}), but libbluray edition " +
+            $"{selector} (title {selector + 1}) loaded runtime={FormatDuration(actualDuration)}, chapters={actualChapterCount}";
+        LastPlaybackError = "The loaded Blu-ray content does not match the selected title. Playback was stopped.";
+        await logger.ErrorAsync(
+            $"Blu-ray title verification failed: {detail}. Playback was stopped rather than risk playing the wrong title.",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        try { _library.Command(context, "stop"); }
+        catch (Exception ex)
+        {
+            await logger.WarningAsync($"Could not stop the mismatched Blu-ray title: {ex.Message}", cancellationToken).ConfigureAwait(false);
+        }
+
+        SetSnapshot(Snapshot with
+        {
+            State = PlaybackState.Stopped,
+            Position = TimeSpan.Zero,
+            Duration = TimeSpan.Zero
+        });
+    }
+
+    private static string DescribeBluRayTitle(BluRayTitle title)
+    {
+        var parts = new List<string>(3);
+        if (!string.IsNullOrWhiteSpace(title.Playlist)) parts.Add(title.Playlist!);
+        if (title.Duration > TimeSpan.Zero) parts.Add(FormatDuration(title.Duration));
+        if (title.ChapterCount > 0) parts.Add($"{title.ChapterCount} chapters");
+        return parts.Count > 0 ? string.Join(", ", parts) : "no identifying metadata";
+    }
+
+    // A discovered title may only be reported as actively playing while playback is
+    // genuinely live. StopAsync keeps the previous Source on the stopped snapshot, so
+    // the state check is what prevents a stale PLAYING badge after stop or fault.
+    internal static bool HasLiveOpticalPlayback(PlaybackSnapshot snapshot, string sourcePrefix) =>
+        snapshot.State is PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused &&
+        snapshot.Source?.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) == true;
+
     public async Task<IReadOnlyList<BluRayTitle>> GetBluRayTitlesAsync(DiscSource disc, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(disc);
@@ -265,11 +509,12 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             return [];
 
         var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        var cacheKey = BuildDiscCacheKey(disc);
+        var cacheKey = EstablishDiscIdentity(disc);
         var wasCurrentDisc = string.Equals(_loadedBluRayCacheKey, cacheKey, StringComparison.OrdinalIgnoreCase);
         _activeBluRayDevice = device;
 
-        var active = wasCurrentDisc ? _activeBluRayTitleIndex : -1;
+        var hasLiveDiscPlayback = wasCurrentDisc && HasLiveOpticalPlayback(Snapshot, "Blu-ray disc");
+        var active = hasLiveDiscPlayback ? _activeBluRayTitleIndex : -1;
         var count = 0;
 
         IReadOnlyList<BluRayTitle> discovered;
@@ -300,8 +545,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 .ToArray();
         }
 
-        if (active < 0 && wasCurrentDisc &&
-            Snapshot.Source?.StartsWith("Blu-ray disc", StringComparison.OrdinalIgnoreCase) == true)
+        if (active < 0 && hasLiveDiscPlayback)
         {
             active = discovered.OrderByDescending(title => title.Duration).First().Index;
             _activeBluRayTitleIndex = active;
@@ -342,7 +586,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
             _activeDvdDevice = device;
             _activeDvdDisplayName = CleanDiscTitle(disc.DisplayName, device, "DVD Disc");
-            _loadedDvdCacheKey = BuildDiscCacheKey(disc);
+            _loadedDvdCacheKey = EstablishDiscIdentity(disc);
             _activeDvdTitleIndex = _dvdTitleCache.TryGetValue(_loadedDvdCacheKey, out var cachedDvdTitles) && cachedDvdTitles.Count > 0
                 ? cachedDvdTitles.OrderByDescending(title => title.Duration).First().Index
                 : -1;
@@ -400,7 +644,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
             _activeDvdDevice = device;
             _activeDvdDisplayName = CleanDiscTitle(disc.DisplayName, device, "DVD Disc");
-            _loadedDvdCacheKey = BuildDiscCacheKey(disc);
+            _loadedDvdCacheKey = EstablishDiscIdentity(disc);
 
             if (_dvdTitleCache.TryGetValue(_loadedDvdCacheKey, out var cachedTitles))
             {
@@ -470,11 +714,12 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             return [];
 
         var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        var cacheKey = BuildDiscCacheKey(disc);
+        var cacheKey = EstablishDiscIdentity(disc);
         var wasCurrentDisc = string.Equals(_loadedDvdCacheKey, cacheKey, StringComparison.OrdinalIgnoreCase);
         _activeDvdDevice = device;
 
-        var active = wasCurrentDisc ? _activeDvdTitleIndex : -1;
+        var hasLiveDiscPlayback = wasCurrentDisc && HasLiveOpticalPlayback(Snapshot, "DVD disc");
+        var active = hasLiveDiscPlayback ? _activeDvdTitleIndex : -1;
         var count = 0;
 
         IReadOnlyList<BluRayTitle> discovered;
@@ -515,8 +760,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 .ToArray();
         }
 
-        if (active < 0 && wasCurrentDisc &&
-            Snapshot.Source?.StartsWith("DVD disc", StringComparison.OrdinalIgnoreCase) == true)
+        if (active < 0 && hasLiveDiscPlayback)
         {
             active = discovered.OrderByDescending(title => title.Duration).First().Index;
             _activeDvdTitleIndex = active;
@@ -752,7 +996,10 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         IReadOnlyList<BluRayTitle> metadataTitles,
         CancellationToken cancellationToken)
     {
-        var cacheKey = BuildDiscCacheKey(disc);
+        // Called only for the currently loaded DVD: OpenDvdTitleAsync establishes the
+        // identity first, and reusing that key keeps degraded/insufficient identities
+        // consistent instead of re-establishing them per call.
+        var cacheKey = _loadedDvdCacheKey ?? EstablishDiscIdentity(disc);
         lock (_dvdMappingSync)
         {
             if (_dvdFullMapCache.Contains(cacheKey))
@@ -866,7 +1113,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         IReadOnlyList<BluRayTitle> metadataTitles,
         IReadOnlyList<DvdEditionInfo> editions)
     {
-        var cacheKey = BuildDiscCacheKey(disc);
+        var cacheKey = EstablishDiscIdentity(disc);
         await _discDiscoveryGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -889,7 +1136,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     {
         lock (_dvdMappingSync)
         {
-            return _dvdPlaybackTitleByMetadataIndex.TryGetValue(BuildDiscCacheKey(disc), out var mapping)
+            return _dvdPlaybackTitleByMetadataIndex.TryGetValue(EstablishDiscIdentity(disc), out var mapping)
                 ? new Dictionary<int, int>(mapping)
                 : new Dictionary<int, int>();
         }
@@ -1072,34 +1319,37 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private static string FormatDuration(TimeSpan duration) =>
         duration.TotalHours >= 1 ? duration.ToString(@"h\:mm\:ss") : duration.ToString(@"m\:ss");
 
-    private static string BuildDiscCacheKey(DiscSource disc)
+    // Single source of optical cache identity. Strong identities derive from the disc
+    // itself and are drive-letter independent; degraded identities stay drive-scoped;
+    // insufficient identities are made unique per establishment so cached optical title
+    // and mapping data can never be reused across a media transition that left no
+    // distinguishing evidence. Internal for deterministic fallback regression coverage.
+    internal string EstablishDiscIdentity(DiscSource disc) =>
+        EstablishOpticalIdentity(OpticalDiscIdentity.Build(disc));
+
+    // Test seam: exercises the insufficient-identity non-reuse mechanism with a
+    // deterministic identity, independent of the host drive's evidence.
+    internal string EstablishDiscIdentityForTesting(OpticalDiscIdentityInfo identity) =>
+        EstablishOpticalIdentity(identity);
+
+    private string EstablishOpticalIdentity(OpticalDiscIdentityInfo identity)
     {
-        var root = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        var identityParts = new List<string>
+        if (_establishedOpticalIdentities.Add(identity.Key))
         {
-            root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-            disc.DisplayName.Trim(),
-            disc.Kind.ToString()
-        };
-
-        try
-        {
-            var identityFile = disc.Kind == DiscKind.Dvd
-                ? Path.Combine(root, "VIDEO_TS", "VIDEO_TS.IFO")
-                : Path.Combine(root, "BDMV", "index.bdmv");
-            if (File.Exists(identityFile))
+            _ = logger.InfoAsync(identity.Classification switch
             {
-                var info = new FileInfo(identityFile);
-                identityParts.Add(info.Length.ToString(CultureInfo.InvariantCulture));
-                identityParts.Add(info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture));
-            }
-        }
-        catch
-        {
-            // Volume label and drive remain a safe fallback identity.
+                OpticalIdentityClassification.Strong =>
+                    $"Optical identity established: {identity.Summary}.",
+                OpticalIdentityClassification.Degraded =>
+                    $"Optical identity degraded: {identity.Summary}; session caches remain drive-scoped.",
+                _ =>
+                    $"Optical identity insufficient: {identity.Summary}; cached optical titles and mappings will not be reused."
+            });
         }
 
-        return string.Join("|", identityParts).ToUpperInvariant();
+        return identity.IsReusable
+            ? identity.Key
+            : $"{identity.Key}|SEQ{Interlocked.Increment(ref _insufficientIdentitySequence).ToString(CultureInfo.InvariantCulture)}";
     }
 
     private static string QuoteArgument(string value) => value.Contains(' ') ? $"\"{value}\"" : value;
@@ -1121,19 +1371,29 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             return;
         }
 
+        // With no actively loading or playing media there is nothing to pause; toggling
+        // would only publish a Playing/Paused state the poll loop has to correct.
+        if (Snapshot.State is not (PlaybackState.Playing or PlaybackState.Paused or PlaybackState.Loading))
+            return;
+
         await WithInitializedContextAsync(context =>
         {
             _paused = !_paused;
             _library.SetProperty(context, "pause", _paused ? "yes" : "no");
-            SetSnapshot(Snapshot with { State = _paused ? PlaybackState.Paused : PlaybackState.Playing });
+            // During Loading the poll loop owns the published state; only a settled
+            // Playing/Paused state is flipped here.
+            if (Snapshot.State is PlaybackState.Playing or PlaybackState.Paused)
+                SetSnapshot(Snapshot with { State = _paused ? PlaybackState.Paused : PlaybackState.Playing });
         }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        var previous = Snapshot;
         if (_usingDvdHost && _dvdHost is { IsActive: true })
         {
             await _dvdHost.StopAsync(cancellationToken).ConfigureAwait(false);
+            await LogPlaybackStoppedAsync(previous, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -1148,6 +1408,20 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                 Duration = TimeSpan.Zero
             });
         }, cancellationToken).ConfigureAwait(false);
+        await LogPlaybackStoppedAsync(previous, cancellationToken).ConfigureAwait(false);
+    }
+
+    // Stop is a deliberate user (or UI-flow) action, never a poll-loop event, so one
+    // INFO line with the previous context is safe and useful for diagnostics.
+    private async Task LogPlaybackStoppedAsync(PlaybackSnapshot previous, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(previous.Source) &&
+            previous.State is not (PlaybackState.Loading or PlaybackState.Playing or PlaybackState.Paused))
+            return;
+
+        await logger.InfoAsync(
+            $"Playback stopped: source={previous.Source ?? "none"}, title={previous.Title}, previous state={previous.State}.",
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SeekRelativeAsync(double seconds, CancellationToken cancellationToken = default)
@@ -1387,39 +1661,6 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                     var fileLoaded = diagnosticEvents.Any(item => item.Kind == "file-loaded");
                     var failed = diagnosticEvents.LastOrDefault(item => item.Kind == "end-file" && item.Level == "error");
 
-                    if (failed is not null && _pendingDvdEditionIndex >= 0)
-                    {
-                        _pendingDvdEditionIndex = -1;
-                        _pendingDvdEditionSwitchIssued = false;
-                    }
-
-                    if (fileLoaded && _pendingDvdEditionIndex >= 0)
-                    {
-                        if (!_pendingDvdEditionSwitchIssued)
-                        {
-                            var pendingEdition = _pendingDvdEditionIndex;
-                            _library.SetProperty(_context, "edition", pendingEdition.ToString(CultureInfo.InvariantCulture));
-                            _pendingDvdEditionSwitchIssued = true;
-                            diagnosticEvents.Add(new MpvDiagnosticEvent(
-                                "dvd-edition",
-                                "info",
-                                "player",
-                                $"Base DVD load completed. Switching to DVD title {pendingEdition + 1} through edition={pendingEdition}."));
-                        }
-                        else
-                        {
-                            var selectedEdition = ParseInt(_library.GetProperty(_context, "current-edition"), -1);
-                            diagnosticEvents.Add(new MpvDiagnosticEvent(
-                                "dvd-edition",
-                                "info",
-                                "player",
-                                $"DVD title switch completed. Requested edition={_pendingDvdEditionIndex}, current-edition={selectedEdition}."));
-                            _activeDvdTitleIndex = _pendingDvdEditionIndex;
-                            _pendingDvdEditionIndex = -1;
-                            _pendingDvdEditionSwitchIssued = false;
-                        }
-                    }
-
                     var position = ParseSeconds(_library.GetProperty(_context, "time-pos"));
                     var duration = ParseSeconds(_library.GetProperty(_context, "duration"));
                     var pause = _library.GetProperty(_context, "pause");
@@ -1441,14 +1682,13 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
 
                     _paused = string.Equals(pause, "yes", StringComparison.OrdinalIgnoreCase);
                     var state = Snapshot.State;
-                    var dvdTitleTransitionPending = _pendingDvdEditionIndex >= 0;
                     if (!string.IsNullOrWhiteSpace(Snapshot.Source))
                     {
                         if (failed is not null)
                         {
                             state = PlaybackState.Faulted;
                         }
-                        else if (Snapshot.State == PlaybackState.Loading && (!fileLoaded || dvdTitleTransitionPending))
+                        else if (Snapshot.State == PlaybackState.Loading && !fileLoaded)
                         {
                             // Do not report Playing until mpv has completed the final file/title load.
                             state = PlaybackState.Loading;
@@ -1471,6 +1711,17 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
                     };
 
                     if (next != Snapshot) SetSnapshot(next);
+
+                    if (fileLoaded && _bluRayVerificationPending)
+                    {
+                        // Consume the pending verification only for the load it belongs to;
+                        // a superseding load (different source) discards it silently.
+                        var verify = string.Equals(Snapshot.Source, _bluRayVerificationSource, StringComparison.Ordinal);
+                        _bluRayVerificationPending = false;
+                        _bluRayVerificationSource = null;
+                        if (verify)
+                            await VerifyLoadedBluRayTitleAsync(_context, cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -1571,75 +1822,6 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             ConfigureDiscDecryptionProvider();
             return _discDecryptionProvider ?? "plain libaacs/libbdplus fallback";
         }
-    }
-
-    private async Task EnsureDvdRuntimeProbeAsync(DiscSource disc, int? titleNumber, CancellationToken cancellationToken)
-    {
-        var cacheKey = $"{BuildDiscCacheKey(disc)}|{(titleNumber is > 0 ? titleNumber.Value.ToString(CultureInfo.InvariantCulture) : "longest")}";
-        if (_dvdProbePassCache.Contains(cacheKey))
-            return;
-
-        var probePath = Path.Combine(AppContext.BaseDirectory, "dvd-probe", "ParallaxStudio.DvdProbe.exe");
-        if (!File.Exists(probePath))
-            throw new InvalidOperationException($"DVD safety probe is missing: {probePath}");
-
-        var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = probePath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        startInfo.ArgumentList.Add(device);
-        if (titleNumber is > 0)
-            startInfo.ArgumentList.Add(titleNumber.Value.ToString(CultureInfo.InvariantCulture));
-
-        await logger.InfoAsync(
-            $"Starting isolated DVD runtime probe for {(titleNumber is > 0 ? $"title {titleNumber}" : "longest title")} on {device}.",
-            cancellationToken).ConfigureAwait(false);
-
-        using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        if (!process.Start())
-            throw new InvalidOperationException("The DVD safety probe process could not be started.");
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        try
-        {
-            var exitTask = process.WaitForExitAsync(cancellationToken);
-            var completed = await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromSeconds(60), cancellationToken)).ConfigureAwait(false);
-            if (!ReferenceEquals(completed, exitTask))
-            {
-                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
-                throw new TimeoutException("The isolated DVD runtime probe did not finish within 60 seconds.");
-            }
-            await exitTask.ConfigureAwait(false);
-        }
-        catch
-        {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
-
-        var stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
-        var stderr = (await stderrTask.ConfigureAwait(false)).Trim();
-        if (!string.IsNullOrWhiteSpace(stdout))
-            await logger.InfoAsync($"DVD probe output: {stdout}", cancellationToken).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(stderr))
-            await logger.WarningAsync($"DVD probe error output: {stderr}", cancellationToken).ConfigureAwait(false);
-
-        if (process.ExitCode != 0)
-        {
-            var unsignedExit = unchecked((uint)process.ExitCode);
-            throw new InvalidOperationException(
-                $"DVD playback was blocked because the isolated native probe failed (exit 0x{unsignedExit:X8}). " +
-                "Parallax Studio remained open; check the playback log for the probe output.");
-        }
-
-        _dvdProbePassCache.Add(cacheKey);
-        await logger.InfoAsync("DVD runtime safety probe passed.", cancellationToken).ConfigureAwait(false);
     }
 
     private async Task LogNativeDiscLibrariesAsync(CancellationToken cancellationToken)

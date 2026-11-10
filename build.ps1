@@ -48,7 +48,7 @@ if ($Bootstrap) {
     Write-Host 'Native dependency bootstrap completed.' -ForegroundColor Green
 }
 
-Write-Host "Building Parallax Studio v1.0-dev.5.5.5 ($Configuration)..." -ForegroundColor Cyan
+Write-Host "Building Parallax Studio v1.0-dev.5.5.6 ($Configuration)..." -ForegroundColor Cyan
 
 if ($Clean) {
     & dotnet clean $solution -c $Configuration
@@ -88,11 +88,24 @@ Write-Host "Isolated DVD playback host staged: $dvdHostRuntime" -ForegroundColor
 
 # Stage MakeMKV LibMMBD under the DLL names libbluray/libmpv requests on Windows.
 # The source native directory remains untouched; only this build output is changed.
-$makeMkvCandidates = @(
-    (Join-Path ${env:ProgramFiles(x86)} 'MakeMKV\libmmbd64.dll'),
-    (Join-Path $env:ProgramFiles 'MakeMKV\libmmbd64.dll')
-) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-$makeMkvLibMmbd = $makeMkvCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+# PARALLAX_STUDIO_LIBMMBD selects the provider explicitly. An explicitly configured
+# path that does not exist is a configuration error, not a fallback condition.
+$makeMkvLibMmbd = $null
+$configuredLibMmbd = $env:PARALLAX_STUDIO_LIBMMBD
+if (-not [string]::IsNullOrWhiteSpace($configuredLibMmbd)) {
+    if (-not (Test-Path -LiteralPath $configuredLibMmbd)) {
+        throw "PARALLAX_STUDIO_LIBMMBD is set to '$configuredLibMmbd', but no file exists at that path. Point it at a valid libmmbd64.dll or unset it to use the standard MakeMKV install locations."
+    }
+    $makeMkvLibMmbd = (Resolve-Path -LiteralPath $configuredLibMmbd).Path
+    Write-Host "Using LibMMBD from PARALLAX_STUDIO_LIBMMBD: $makeMkvLibMmbd" -ForegroundColor DarkCyan
+}
+else {
+    $makeMkvCandidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'MakeMKV\libmmbd64.dll'),
+        (Join-Path $env:ProgramFiles 'MakeMKV\libmmbd64.dll')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $makeMkvLibMmbd = $makeMkvCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
 
 if ($makeMkvLibMmbd) {
     $standardAacs = Join-Path $root 'native\libaacs.dll'
@@ -120,6 +133,16 @@ if ($makeMkvLibMmbd) {
         throw 'MakeMKV LibMMBD staging verification failed.'
     }
 
+    # The marker tells the app project (ParallaxStudio.App.csproj) that these aliases are an
+    # intentionally staged LibMMBD provider, so a later plain dotnet build must not overwrite
+    # them with the standard native libraries.
+    $markerPath = Join-Path $appOutput 'libmmbd.staged'
+    Set-Content -LiteralPath $markerPath -Encoding ascii -Value @(
+        "provider=$makeMkvLibMmbd",
+        "sha256=$providerHash",
+        "stagedUtc=$((Get-Date).ToUniversalTime().ToString('o'))"
+    )
+
     Write-Host "MakeMKV LibMMBD staged for protected Blu-ray playback:" -ForegroundColor Green
     Write-Host "  provider: $makeMkvLibMmbd"
     Write-Host "  libaacs.dll: $runtimeAacs"
@@ -127,6 +150,21 @@ if ($makeMkvLibMmbd) {
     Write-Host "  SHA-256: $providerHash"
 }
 else {
+    $markerPath = Join-Path $appOutput 'libmmbd.staged'
+    if (Test-Path -LiteralPath $markerPath) {
+        # MakeMKV disappeared after a previous staging. Restore the standard provider so the
+        # selected provider stays deterministic instead of silently keeping a stale alias.
+        $standardAacs = Join-Path $root 'native\libaacs.dll'
+        $standardBdPlus = Join-Path $root 'native\libbdplus.dll'
+        if (Test-Path -LiteralPath $standardAacs) {
+            Copy-Item -LiteralPath $standardAacs -Destination (Join-Path $appOutput 'libaacs.dll') -Force
+        }
+        if (Test-Path -LiteralPath $standardBdPlus) {
+            Copy-Item -LiteralPath $standardBdPlus -Destination (Join-Path $appOutput 'libbdplus.dll') -Force
+        }
+        Remove-Item -LiteralPath $markerPath -Force
+        Write-Host 'Previously staged LibMMBD removed; standard libaacs/libbdplus restored.' -ForegroundColor DarkYellow
+    }
     Write-Warning 'MakeMKV libmmbd64.dll was not found. Standard libaacs/libbdplus will remain active.'
 }
 

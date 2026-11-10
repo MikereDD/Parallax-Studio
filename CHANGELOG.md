@@ -14,6 +14,11 @@
 - adds a 1024 px source raster, dedicated PNG sizes, and a multi-resolution Windows `.ico`
 - refreshes README, architecture, testing, roadmap, optical-media, native-runtime, and third-party documentation around the proven v1.0-dev.5.5.5 architecture
 - documents the local MakeMKV / LibMMBD boundary without treating locally staged MakeMKV binaries as Parallax-owned redistribution assets
+- fixes stopped, idle, and faulted transport states displaying Pause; Play/Pause now reflects actual playback state, toggling with no active media no longer publishes a false state, opening a local file clears stale optical title-browser state, and the fullscreen window forwards Escape, Space, arrow, M, and F keys with timeline seeking; also corrects the package `RepositoryUrl` metadata
+- makes native-provider staging deterministic: `build.ps1` honors `PARALLAX_STUDIO_LIBMMBD` first and fails clearly when the configured path is missing, protects staged LibMMBD aliases from MSBuild overwrite and IncrementalClean, adds `scripts/Test-ProviderStaging.ps1`, removes the obsolete `"The Road"` title special case, and deletes pre-isolation DVD code proven unreachable
+- resolves indexed Blu-ray titles by playlist, runtime, and chapter evidence instead of assuming MakeMKV title ordinals equal libbluray edition indices; ambiguous or conflicting mappings are refused rather than guessed, and post-load runtime/chapter evidence verifies the resolved title
+- fixes stale title-browser PLAYING indicators after stop or fault by deriving active state from live optical playback, and adds concise INFO logging for user-initiated stop and high-level artwork-resolution outcomes
+- replaces drive-letter-dependent optical session-cache keys with collision-resistant physical-disc identity (SHA-256 over the DVD `VIDEO_TS` IFO set or the Blu-ray `index.bdmv` / `MovieObject.bdmv` / playlist fingerprint); degraded identities stay drive-scoped, and insufficient evidence prevents stale cache reuse instead of guessing
 
 ## 1.0-dev.5.5.5 — Full DVD Title Map
 

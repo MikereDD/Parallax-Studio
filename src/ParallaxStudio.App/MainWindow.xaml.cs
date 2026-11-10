@@ -8,6 +8,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using System.Windows.Media;
+using ParallaxStudio.App.Common;
 using ParallaxStudio.App.Interop;
 using ParallaxStudio.App.ViewModels;
 
@@ -425,41 +426,7 @@ public partial class MainWindow : Window
             IsWithin<CheckBox>(e.OriginalSource as DependencyObject) ||
             IsWithin<Slider>(e.OriginalSource as DependencyObject)) return;
 
-        switch (e.Key)
-        {
-            case Key.Space:
-                _viewModel.PlayPauseCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Key.Left:
-                _viewModel.SeekBackCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Key.Right:
-                _viewModel.SeekForwardCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Key.Up:
-                _viewModel.Volume = Math.Min(100, _viewModel.Volume + 5);
-                e.Handled = true;
-                break;
-            case Key.Down:
-                _viewModel.Volume = Math.Max(0, _viewModel.Volume - 5);
-                e.Handled = true;
-                break;
-            case Key.M:
-                _viewModel.ToggleMuteCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Key.F:
-                _viewModel.ToggleFullscreenCommand.Execute(null);
-                e.Handled = true;
-                break;
-            case Key.Escape when _viewModel.IsFullscreen && _viewModel.EscapeExitsFullscreen:
-                _viewModel.ToggleFullscreenCommand.Execute(null);
-                e.Handled = true;
-                break;
-        }
+        e.Handled = TransportKeyboardShortcuts.TryHandle(_viewModel, e.Key);
     }
 
     private static bool IsWithin<T>(DependencyObject? source) where T : DependencyObject

@@ -80,7 +80,7 @@ A separate probe process is used for bounded inspection and full-disc title-map 
 
 MakeMKV and libdvdnav can expose different title numbering for the same DVD. Parallax therefore treats discovery metadata and playback selectors as separate namespaces. The current mapper compares libdvdnav edition runtimes against MakeMKV-discovered runtimes and only creates confident mappings. Post-load runtime/chapter reconciliation verifies the selected program.
 
-Disc-specific caches are keyed by disc identity rather than drive letter so replacing media in the same drive cannot reuse stale title metadata.
+Disc-specific caches are keyed by a content-derived disc identity (hashed VIDEO_TS/BDMV structural evidence) rather than drive letter: the same physical disc keeps its identity across drives, replacing media in the same drive cannot reuse stale title metadata, degraded identities stay drive-scoped, and indistinguishable media never reuse caches. See docs/OPTICAL_MEDIA.md.
 
 See `docs/OPTICAL_MEDIA.md` for operational details.
 

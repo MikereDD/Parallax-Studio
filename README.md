@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0--dev.5.5.5-2d2d2d" alt="version 1.0-dev.5.5.5">
+  <img src="https://img.shields.io/badge/version-1.0--dev.5.5.6-2d2d2d" alt="version 1.0-dev.5.5.6">
   <img src="https://img.shields.io/badge/.NET-10-2d2d2d?logo=dotnet&logoColor=white" alt=".NET 10">
   <img src="https://img.shields.io/badge/UI-WPF%20%2B%20XAML-2d2d2d" alt="WPF and XAML">
   <img src="https://img.shields.io/badge/pattern-MVVM-2d2d2d" alt="MVVM">
@@ -86,7 +86,7 @@ dotnet build .\ParallaxStudio.sln -c Debug
 dotnet run --project .\src\ParallaxStudio.App\ParallaxStudio.App.csproj
 ```
 
-Stage native dependencies before using the direct CLI path; compilation alone does not download the playback engine. To check the staged native files explicitly:
+Stage native dependencies before using the direct CLI path; compilation alone does not download the playback engine. The direct CLI path also does not stage the isolated DVD playback host or the DvdProbe utility beside the app output — `build.ps1` copies them into `dvd-host\` and `dvd-probe\` under the app output, so DVD title mapping and isolated DVD playback require the `build.ps1` path (or an equivalent manual copy). When those components are missing, DVD features fail with an explicit missing-component error rather than silently misbehaving. To check the staged native files explicitly:
 
 ```powershell
 .\scripts\Verify-NativeDependencies.ps1
@@ -115,9 +115,12 @@ Parallax Studio's source repository **does not download or bundle MakeMKV**. Whe
 2. copies the locally installed `libmmbd64.dll` into the build output;
 3. stages that same local file as runtime `libaacs.dll` and `libbdplus.dll`, which is the compatibility naming expected by the libbluray/libmpv disc path;
 4. verifies the staged files against the local provider with SHA-256 before launch;
-5. reports the active disc-decryption provider in the application log.
+5. writes a `libmmbd.staged` marker (provider path and SHA-256) into the build output;
+6. reports the active disc-decryption provider in the application log.
 
-The playback service also accepts `PARALLAX_STUDIO_LIBMMBD` to point at a specific local `libmmbd64.dll` when the standard MakeMKV installation path is not appropriate.
+While the `libmmbd.staged` marker exists, a plain `dotnet build` leaves the staged LibMMBD aliases untouched; without the marker the build copies the standard `native\libaacs.dll`/`libbdplus.dll` into the output. `dotnet clean` removes the marker and the staged files, so the next build returns to the standard provider. Provider selection after every build path is therefore deterministic: `build.ps1` with MakeMKV found stages LibMMBD, everything else yields the standard provider. `scripts/Test-ProviderStaging.ps1 -Configuration <Debug|Release>` verifies which provider is staged and fails if the output contradicts the marker. If a later `build.ps1` run no longer finds MakeMKV, it removes the marker and restores the standard libraries instead of silently keeping a stale alias.
+
+Both `build.ps1` and the playback service honor `PARALLAX_STUDIO_LIBMMBD` first to point at a specific local `libmmbd64.dll` when the standard MakeMKV installation path is not appropriate. If the variable is set but the file does not exist, the build stops with a clear error instead of silently falling back to the standard locations.
 
 **Redistribution note:** the build output may contain files copied from the user's local MakeMKV installation. Do not treat those locally staged files as Parallax-owned redistributable dependencies. Packaging/public-release work must review the applicable third-party licenses and redistribution terms before including any such binary.
 
@@ -203,3 +206,7 @@ Parallax Studio is an independent Typezer∅ Studio application. It does not sha
 The current polish/intelligence pass improves Now Playing, local artwork, metadata presentation, and appearance controls while retaining the established native playback boundaries. Further work includes validating the DVD title map across more publishers/discs, persistent verified mappings, richer metadata where available, packaging, and release infrastructure.
 
 See [ROADMAP.md](ROADMAP.md) for the staged plan and [CHANGELOG.md](CHANGELOG.md) for development history.
+
+## License
+
+Parallax Studio's own source code is licensed under the [Apache License 2.0](LICENSE). Third-party native components remain governed by their respective upstream licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).

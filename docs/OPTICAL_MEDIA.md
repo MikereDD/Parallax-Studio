@@ -8,6 +8,10 @@ Parallax Studio uses libmpv/libbluray for Blu-ray playback. The application conf
 
 Title discovery is performed separately through a locally installed MakeMKV command-line executable when available. Discovery data is used for duration, chapter count, playlist/title metadata, likely-main-feature ranking, and the title browser. Discovery is serialized with playback access so MakeMKV and libmpv do not compete for the optical drive.
 
+### Indexed title resolution
+
+MakeMKV title ordinals and libbluray edition indices do not reliably correspond, so Parallax never assumes that MakeMKV title N is libbluray `bd://N`. When an indexed title is selected, the resolver matches the MakeMKV discovery entry to a libbluray edition using playlist, runtime, and chapter evidence; ambiguous or conflicting mappings are refused rather than guessed. After load, the actual runtime and chapter count are checked against the expected title when available, and a mismatch is reported instead of silently playing the wrong content. `bd://longest` main-feature playback is a separate path and does not use indexed-title resolution.
+
 ### Protected Blu-ray provider
 
 The preferred development path for protected Blu-rays is a locally installed MakeMKV `libmmbd64.dll`.
@@ -20,7 +24,7 @@ At build/run time Parallax checks, in order:
 
 When a local provider is found, `build.ps1` stages the user's `libmmbd64.dll` into the application output and creates runtime compatibility aliases named `libaacs.dll` and `libbdplus.dll`. If the standard bootstrapped providers exist, they are preserved alongside the runtime as `libaacs.standard.dll` and `libbdplus.standard.dll`.
 
-The staging step verifies that the alias files match the local `libmmbd64.dll` before launch. The playback service also sets process-local `LIBAACS_PATH` and `LIBBDPLUS_PATH` to the selected provider and records the active provider in the log.
+The staging step verifies that the alias files match the local `libmmbd64.dll` before launch and records the provider path and SHA-256 in a `libmmbd.staged` marker beside the aliases. While that marker exists, a plain `dotnet build` never overwrites the aliases with the standard libraries; removing the marker (or running `dotnet clean`) returns the next build to the standard provider. `scripts/Test-ProviderStaging.ps1` checks that the staged provider matches the marker. The playback service also sets process-local `LIBAACS_PATH` and `LIBBDPLUS_PATH` to the selected provider and records the active provider in the log.
 
 If MakeMKV is unavailable, Parallax falls back to the standard bootstrapped `libaacs`/`libbdplus` path. Protected-disc success then depends on that provider's normal configuration and the specific disc.
 
@@ -68,7 +72,13 @@ Future work will persist verified mappings between sessions and add optional met
 
 ## Disc identity and cache direction
 
-Current title metadata is cached by disc identity rather than drive letter alone so a swap in the same optical drive does not reuse stale results. Persistent mapping should continue this rule and incorporate stable disc structure/label information rather than assuming volume labels encode a literal disc number.
+All session-scoped optical caches (Blu-ray/DVD title lists, libbluray edition lists, DVD title maps and verified mappings) are keyed by one identity builder, `OpticalDiscIdentity`, with three classes:
+
+- **Strong** — built from the disc itself: disc kind, normalized volume label, and SHA-256 hashed structural evidence (`VIDEO_TS\*.IFO` names/sizes/timestamps/hashes for DVD; `BDMV\index.bdmv` and `MovieObject.bdmv` hashes plus the sorted playlist filename/size fingerprint for Blu-ray). Large stream files (VOB, `.m2ts`) are never read. A strong identity is independent of the drive letter, so the same physical disc keeps its caches when moved between drives, and two discs that merely share a volume label cannot collide. Timestamps are included only as secondary evidence alongside content hashes.
+- **Degraded** — when the mandatory identity file (`VIDEO_TS.IFO` / `index.bdmv`) is unreadable but some trustworthy evidence remains (partial structural fingerprints, reported volume size), the identity keeps all of that evidence but is scoped to the drive root. It never becomes portable across drives.
+- **Insufficient** — when no distinguishing evidence is readable at all, the service mints a fresh, non-reusable key per establishment so stale title or mapping caches can never be hit across a media transition that left no evidence.
+
+Identity establishment is logged once per session (strong, degraded, or insufficient) with a short fingerprint prefix. Persistent mapping (future work) should reuse the strong identity and continue to avoid assuming volume labels encode a literal disc number.
 
 ## Diagnostics
 
