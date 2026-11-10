@@ -8,6 +8,10 @@ Parallax Studio uses libmpv/libbluray for Blu-ray playback. The application conf
 
 Title discovery is performed separately through a locally installed MakeMKV command-line executable when available. Discovery data is used for duration, chapter count, playlist/title metadata, likely-main-feature ranking, and the title browser. Discovery is serialized with playback access so MakeMKV and libmpv do not compete for the optical drive.
 
+### Indexed title resolution
+
+MakeMKV title ordinals and libbluray edition indices do not reliably correspond, so Parallax never assumes that MakeMKV title N is libbluray `bd://N`. When an indexed title is selected, the resolver matches the MakeMKV discovery entry to a libbluray edition using playlist, runtime, and chapter evidence; ambiguous or conflicting mappings are refused rather than guessed. After load, the actual runtime and chapter count are checked against the expected title when available, and a mismatch is reported instead of silently playing the wrong content. `bd://longest` main-feature playback is a separate path and does not use indexed-title resolution.
+
 ### Protected Blu-ray provider
 
 The preferred development path for protected Blu-rays is a locally installed MakeMKV `libmmbd64.dll`.

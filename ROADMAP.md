@@ -2,7 +2,7 @@
 
 Parallax Studio uses its own version line. Development builds remain under the `v1.0-dev.x` series until the modern application reaches validated feature parity and stability suitable for `v1.0`.
 
-## Current optical-media milestone — v1.0-dev.5.5.5
+## Current optical-media milestone — v1.0-dev.5.5.6
 
 - [x] Protected Blu-ray playback through locally installed MakeMKV LibMMBD when available
 - [x] MakeMKV-backed Blu-ray title discovery and direct title switching

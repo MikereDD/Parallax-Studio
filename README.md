@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0--dev.5.5.5-2d2d2d" alt="version 1.0-dev.5.5.5">
+  <img src="https://img.shields.io/badge/version-1.0--dev.5.5.6-2d2d2d" alt="version 1.0-dev.5.5.6">
   <img src="https://img.shields.io/badge/.NET-10-2d2d2d?logo=dotnet&logoColor=white" alt=".NET 10">
   <img src="https://img.shields.io/badge/UI-WPF%20%2B%20XAML-2d2d2d" alt="WPF and XAML">
   <img src="https://img.shields.io/badge/pattern-MVVM-2d2d2d" alt="MVVM">
@@ -86,7 +86,7 @@ dotnet build .\ParallaxStudio.sln -c Debug
 dotnet run --project .\src\ParallaxStudio.App\ParallaxStudio.App.csproj
 ```
 
-Stage native dependencies before using the direct CLI path; compilation alone does not download the playback engine. To check the staged native files explicitly:
+Stage native dependencies before using the direct CLI path; compilation alone does not download the playback engine. The direct CLI path also does not stage the isolated DVD playback host or the DvdProbe utility beside the app output — `build.ps1` copies them into `dvd-host\` and `dvd-probe\` under the app output, so DVD title mapping and isolated DVD playback require the `build.ps1` path (or an equivalent manual copy). When those components are missing, DVD features fail with an explicit missing-component error rather than silently misbehaving. To check the staged native files explicitly:
 
 ```powershell
 .\scripts\Verify-NativeDependencies.ps1
@@ -206,3 +206,7 @@ Parallax Studio is an independent Typezer∅ Studio application. It does not sha
 The current polish/intelligence pass improves Now Playing, local artwork, metadata presentation, and appearance controls while retaining the established native playback boundaries. Further work includes validating the DVD title map across more publishers/discs, persistent verified mappings, richer metadata where available, packaging, and release infrastructure.
 
 See [ROADMAP.md](ROADMAP.md) for the staged plan and [CHANGELOG.md](CHANGELOG.md) for development history.
+
+## License
+
+Parallax Studio's own source code is licensed under the [Apache License 2.0](LICENSE). Third-party native components remain governed by their respective upstream licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).

@@ -21,4 +21,4 @@ Before publishing installers, portable ZIPs, CI artifacts, or other redistributa
 
 ## Project-owned code
 
-Parallax Studio's own source is governed by the repository `LICENSE`. Upstream native components remain governed by their respective projects and licenses.
+Parallax Studio's own source is licensed under the Apache License 2.0 (see the repository `LICENSE`). Upstream native components remain governed by their respective projects and licenses; Parallax Studio's license does not relicense or alter the terms of any bundled or external third-party component.
