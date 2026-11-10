@@ -26,14 +26,47 @@ internal static partial class Program
     // Longest a full teardown of an unresponsive host may take with TestTimeouts, plus slack.
     private static readonly TimeSpan TeardownBound = TimeSpan.FromSeconds(9);
 
+    // A synthetic, readable VIDEO_TS gives the shared stub disc a STRONG optical identity
+    // (Phase 6B): the title-map test seams require stable, reusable cache keys, which an
+    // unreadable root no longer provides.
+    private static readonly string SyntheticDvdRoot = CreateSyntheticDvd();
+
     private static readonly DiscSource Disc = new(
-        Path.GetPathRoot(Path.GetTempPath()) ?? Path.GetTempPath(),
+        SyntheticDvdRoot,
         "STUB_DVD",
         DiscKind.Dvd,
         true);
 
+    private static string CreateSyntheticDvd()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"parallax-stub-dvd-{Guid.NewGuid():N}");
+        var videoTs = Path.Combine(root, "VIDEO_TS");
+        Directory.CreateDirectory(videoTs);
+        var stamp = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        foreach (var (name, content) in new[]
+        {
+            ("VIDEO_TS.IFO", "STUB_DVD_VIDEO_MANAGER"),
+            ("VTS_01_0.IFO", "STUB_DVD_TITLE_SET_1")
+        })
+        {
+            var path = Path.Combine(videoTs, name);
+            File.WriteAllText(path, content);
+            File.SetLastWriteTimeUtc(path, stamp);
+        }
+
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch { }
+        };
+        return root;
+    }
+
     private static async Task<int> Main(string[] args)
     {
+        if (args.Length >= 2 && string.Equals(args[0], "--identity", StringComparison.OrdinalIgnoreCase))
+            return PrintDiscIdentity(args[1]);
+
         (string Name, Func<Task> Run)[] checks =
         [
             ("protocol: shutdown is acknowledged before the request loop returns", ShutdownAcknowledgedBeforeLoopReturnsAsync),
@@ -62,7 +95,8 @@ internal static partial class Program
             ("service: toggle pause without active media is a no-op", ServiceTogglePauseWithoutMediaIsNoOpAsync),
             .. TitleMatchingChecks,
             .. BluRayResolutionChecks,
-            .. OpticalActiveStateChecks
+            .. OpticalActiveStateChecks,
+            .. OpticalIdentityChecks
         ];
 
         var filter = args.FirstOrDefault();
@@ -139,6 +173,38 @@ internal static partial class Program
     }
 
     private static string Json(DvdHostRequest request) => System.Text.Json.JsonSerializer.Serialize(request);
+
+    // Diagnostic mode: print the optical identity a mounted disc would produce
+    // (Phase 6B physical evidence gathering; strictly read-only).
+    private static int PrintDiscIdentity(string driveRoot)
+    {
+        var root = Path.GetPathRoot(Path.GetFullPath(driveRoot)) ?? driveRoot;
+        var kind = Directory.Exists(Path.Combine(root, "VIDEO_TS")) ? DiscKind.Dvd
+            : Directory.Exists(Path.Combine(root, "BDMV")) ? DiscKind.BluRay
+            : (DiscKind?)null;
+        if (kind is null)
+        {
+            Console.WriteLine($"No DVD or Blu-ray structure found at {root}.");
+            return 1;
+        }
+
+        string label;
+        try { label = new DriveInfo(root).VolumeLabel; }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not read the volume label for {root}: {ex.Message}");
+            return 1;
+        }
+
+        var identity = OpticalDiscIdentity.Build(new DiscSource(root, label, kind.Value, true));
+        Console.WriteLine($"drive:          {root}");
+        Console.WriteLine($"kind:           {kind}");
+        Console.WriteLine($"label:          {label}");
+        Console.WriteLine($"classification: {identity.Classification}");
+        Console.WriteLine($"key:            {identity.Key}");
+        Console.WriteLine($"summary:        {identity.Summary}");
+        return 0;
+    }
 
     // ----- DvdPlaybackHostClient -------------------------------------------------------
 

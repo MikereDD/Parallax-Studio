@@ -33,6 +33,11 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     // kept so a refused title can say why. Guarded by _dvdMappingSync.
     private readonly Dictionary<string, DvdTitleMapResult> _dvdTitleMapResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _dvdMappingSync = new();
+    // Optical identities logged once per session; insufficient identities are made unique
+    // per establishment so stale caches can never be reused across an indistinguishable
+    // media transition.
+    private readonly HashSet<string> _establishedOpticalIdentities = new(StringComparer.OrdinalIgnoreCase);
+    private int _insufficientIdentitySequence;
     private DvdPlaybackHostClient? _dvdHost;
     private bool _usingDvdHost;
     // Ownership of DVD host routing. Every claim of (or release from) the DVD host path
@@ -189,7 +194,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
             _activeBluRayDevice = device;
-            _loadedBluRayCacheKey = BuildDiscCacheKey(disc);
+            _loadedBluRayCacheKey = EstablishDiscIdentity(disc);
             _activeBluRayTitleIndex = _bluRayTitleCache.TryGetValue(_loadedBluRayCacheKey, out var cachedBluRayTitles) && cachedBluRayTitles.Count > 0
                 ? cachedBluRayTitles.OrderByDescending(title => title.Duration).First().Index
                 : -1;
@@ -235,7 +240,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         try
         {
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-            var cacheKey = BuildDiscCacheKey(disc);
+            var cacheKey = EstablishDiscIdentity(disc);
 
             if (!_bluRayTitleCache.TryGetValue(cacheKey, out var titles))
             {
@@ -504,7 +509,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             return [];
 
         var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        var cacheKey = BuildDiscCacheKey(disc);
+        var cacheKey = EstablishDiscIdentity(disc);
         var wasCurrentDisc = string.Equals(_loadedBluRayCacheKey, cacheKey, StringComparison.OrdinalIgnoreCase);
         _activeBluRayDevice = device;
 
@@ -581,7 +586,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
             _activeDvdDevice = device;
             _activeDvdDisplayName = CleanDiscTitle(disc.DisplayName, device, "DVD Disc");
-            _loadedDvdCacheKey = BuildDiscCacheKey(disc);
+            _loadedDvdCacheKey = EstablishDiscIdentity(disc);
             _activeDvdTitleIndex = _dvdTitleCache.TryGetValue(_loadedDvdCacheKey, out var cachedDvdTitles) && cachedDvdTitles.Count > 0
                 ? cachedDvdTitles.OrderByDescending(title => title.Duration).First().Index
                 : -1;
@@ -639,7 +644,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
             _activeDvdDevice = device;
             _activeDvdDisplayName = CleanDiscTitle(disc.DisplayName, device, "DVD Disc");
-            _loadedDvdCacheKey = BuildDiscCacheKey(disc);
+            _loadedDvdCacheKey = EstablishDiscIdentity(disc);
 
             if (_dvdTitleCache.TryGetValue(_loadedDvdCacheKey, out var cachedTitles))
             {
@@ -709,7 +714,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
             return [];
 
         var device = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        var cacheKey = BuildDiscCacheKey(disc);
+        var cacheKey = EstablishDiscIdentity(disc);
         var wasCurrentDisc = string.Equals(_loadedDvdCacheKey, cacheKey, StringComparison.OrdinalIgnoreCase);
         _activeDvdDevice = device;
 
@@ -991,7 +996,10 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         IReadOnlyList<BluRayTitle> metadataTitles,
         CancellationToken cancellationToken)
     {
-        var cacheKey = BuildDiscCacheKey(disc);
+        // Called only for the currently loaded DVD: OpenDvdTitleAsync establishes the
+        // identity first, and reusing that key keeps degraded/insufficient identities
+        // consistent instead of re-establishing them per call.
+        var cacheKey = _loadedDvdCacheKey ?? EstablishDiscIdentity(disc);
         lock (_dvdMappingSync)
         {
             if (_dvdFullMapCache.Contains(cacheKey))
@@ -1105,7 +1113,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
         IReadOnlyList<BluRayTitle> metadataTitles,
         IReadOnlyList<DvdEditionInfo> editions)
     {
-        var cacheKey = BuildDiscCacheKey(disc);
+        var cacheKey = EstablishDiscIdentity(disc);
         await _discDiscoveryGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -1128,7 +1136,7 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     {
         lock (_dvdMappingSync)
         {
-            return _dvdPlaybackTitleByMetadataIndex.TryGetValue(BuildDiscCacheKey(disc), out var mapping)
+            return _dvdPlaybackTitleByMetadataIndex.TryGetValue(EstablishDiscIdentity(disc), out var mapping)
                 ? new Dictionary<int, int>(mapping)
                 : new Dictionary<int, int>();
         }
@@ -1311,34 +1319,37 @@ public sealed class MpvPlaybackService(IAppLogger logger) : IPlaybackService
     private static string FormatDuration(TimeSpan duration) =>
         duration.TotalHours >= 1 ? duration.ToString(@"h\:mm\:ss") : duration.ToString(@"m\:ss");
 
-    private static string BuildDiscCacheKey(DiscSource disc)
+    // Single source of optical cache identity. Strong identities derive from the disc
+    // itself and are drive-letter independent; degraded identities stay drive-scoped;
+    // insufficient identities are made unique per establishment so cached optical title
+    // and mapping data can never be reused across a media transition that left no
+    // distinguishing evidence. Internal for deterministic fallback regression coverage.
+    internal string EstablishDiscIdentity(DiscSource disc) =>
+        EstablishOpticalIdentity(OpticalDiscIdentity.Build(disc));
+
+    // Test seam: exercises the insufficient-identity non-reuse mechanism with a
+    // deterministic identity, independent of the host drive's evidence.
+    internal string EstablishDiscIdentityForTesting(OpticalDiscIdentityInfo identity) =>
+        EstablishOpticalIdentity(identity);
+
+    private string EstablishOpticalIdentity(OpticalDiscIdentityInfo identity)
     {
-        var root = Path.GetPathRoot(disc.DriveRoot) ?? disc.DriveRoot;
-        var identityParts = new List<string>
+        if (_establishedOpticalIdentities.Add(identity.Key))
         {
-            root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-            disc.DisplayName.Trim(),
-            disc.Kind.ToString()
-        };
-
-        try
-        {
-            var identityFile = disc.Kind == DiscKind.Dvd
-                ? Path.Combine(root, "VIDEO_TS", "VIDEO_TS.IFO")
-                : Path.Combine(root, "BDMV", "index.bdmv");
-            if (File.Exists(identityFile))
+            _ = logger.InfoAsync(identity.Classification switch
             {
-                var info = new FileInfo(identityFile);
-                identityParts.Add(info.Length.ToString(CultureInfo.InvariantCulture));
-                identityParts.Add(info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture));
-            }
-        }
-        catch
-        {
-            // Volume label and drive remain a safe fallback identity.
+                OpticalIdentityClassification.Strong =>
+                    $"Optical identity established: {identity.Summary}.",
+                OpticalIdentityClassification.Degraded =>
+                    $"Optical identity degraded: {identity.Summary}; session caches remain drive-scoped.",
+                _ =>
+                    $"Optical identity insufficient: {identity.Summary}; cached optical titles and mappings will not be reused."
+            });
         }
 
-        return string.Join("|", identityParts).ToUpperInvariant();
+        return identity.IsReusable
+            ? identity.Key
+            : $"{identity.Key}|SEQ{Interlocked.Increment(ref _insufficientIdentitySequence).ToString(CultureInfo.InvariantCulture)}";
     }
 
     private static string QuoteArgument(string value) => value.Contains(' ') ? $"\"{value}\"" : value;

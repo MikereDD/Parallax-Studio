@@ -68,7 +68,13 @@ Future work will persist verified mappings between sessions and add optional met
 
 ## Disc identity and cache direction
 
-Current title metadata is cached by disc identity rather than drive letter alone so a swap in the same optical drive does not reuse stale results. Persistent mapping should continue this rule and incorporate stable disc structure/label information rather than assuming volume labels encode a literal disc number.
+All session-scoped optical caches (Blu-ray/DVD title lists, libbluray edition lists, DVD title maps and verified mappings) are keyed by one identity builder, `OpticalDiscIdentity`, with three classes:
+
+- **Strong** — built from the disc itself: disc kind, normalized volume label, and SHA-256 hashed structural evidence (`VIDEO_TS\*.IFO` names/sizes/timestamps/hashes for DVD; `BDMV\index.bdmv` and `MovieObject.bdmv` hashes plus the sorted playlist filename/size fingerprint for Blu-ray). Large stream files (VOB, `.m2ts`) are never read. A strong identity is independent of the drive letter, so the same physical disc keeps its caches when moved between drives, and two discs that merely share a volume label cannot collide. Timestamps are included only as secondary evidence alongside content hashes.
+- **Degraded** — when the mandatory identity file (`VIDEO_TS.IFO` / `index.bdmv`) is unreadable but some trustworthy evidence remains (partial structural fingerprints, reported volume size), the identity keeps all of that evidence but is scoped to the drive root. It never becomes portable across drives.
+- **Insufficient** — when no distinguishing evidence is readable at all, the service mints a fresh, non-reusable key per establishment so stale title or mapping caches can never be hit across a media transition that left no evidence.
+
+Identity establishment is logged once per session (strong, degraded, or insufficient) with a short fingerprint prefix. Persistent mapping (future work) should reuse the strong identity and continue to avoid assuming volume labels encode a literal disc number.
 
 ## Diagnostics
 
