@@ -201,7 +201,34 @@ Run the deterministic TMDB resolver checks without a live API token:
 
 The checks cover disabled online artwork, missing credentials, cache hits, exact
 title/year matching, ambiguous-title refusal, network failure, corrupt and
-oversized poster responses, cancellation, and optical cache identity.
+oversized poster responses, cancellation, and optical cache identity. They also
+cover overview selection from the accepted movie/runtime/TV candidate, rejected
+metadata, cache-only reloads, runtime isolation, and bounded/corrupt metadata.
+Presentation checks exercise preferred local art while metadata is pending or
+offline, source/title/stop clearing, and the actual plot visibility, wrapping,
+theme, height, and expand/collapse bindings.
+
+### Now Playing plot
+
+- Verify normal and long overviews; the `PLOT` section initially shows about four
+  lines, and `Full plot` / `Show less` uses the suite command-button style.
+- Null, empty, or whitespace overviews must hide the entire section. Plot text
+  must never appear in optical title-browser rows.
+- Local art must appear immediately and remain selected while the accepted TMDB
+  candidate supplies the plot. No separate fuzzy search is allowed for plots.
+- Prime a lookup with caching enabled, then relaunch offline (or without a token).
+  With **Online posters** still enabled, poster and plot should reload from
+  `%LOCALAPPDATA%\ParallaxStudio\cache\artwork\tmdb`. JSON sidecars share each
+  poster's hash basename, including runtime-specific identities; they contain
+  accepted ID, type, title, year, optional overview, and a poster SHA-256 binding,
+  never credentials. A sidecar without a matching poster digest is ignored so a
+  failed/interrupted replacement cannot pair a new poster with an old plot.
+- Missing, corrupt, invalid, or oversized JSON must not invalidate a cached
+  poster. Metadata files are limited to 64 KiB and overview text to 4,000
+  characters; writes use a temporary file and atomic move. A valid poster-only
+  legacy cache remains usable without inventing a plot or fetching one anew.
+- Switch source/title or stop while metadata is pending: no old plot or expanded
+  state may remain. Pause and seek must preserve the current plot.
 
 For live validation, set a TMDB API Read Access Token in
 `PARALLAX_TMDB_TOKEN`, fully relaunch Parallax Studio, and verify:

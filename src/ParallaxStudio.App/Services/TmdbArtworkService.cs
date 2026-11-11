@@ -167,7 +167,20 @@ public sealed record TmdbArtworkCandidate(
     string Title,
     string? OriginalTitle,
     int? Year,
-    string? PosterPath);
+    string? PosterPath,
+    string? Overview);
+
+/// <summary>
+/// One accepted TMDB match. The poster and the overview always come from the same
+/// candidate; refused or ambiguous lookups produce no result at all.
+/// </summary>
+public sealed record TmdbMediaResult(
+    ImageSource Poster,
+    int? TmdbId,
+    string MediaType,
+    string Title,
+    int? Year,
+    string? Overview);
 
 /// <summary>
 /// Optional TMDB poster resolver. It never touches the playback backend or optical media.
@@ -178,6 +191,8 @@ public sealed class TmdbArtworkService
 {
     public const string TokenEnvironmentVariable = "PARALLAX_TMDB_TOKEN";
     private const long MaximumPosterBytes = 16 * 1024 * 1024;
+    private const long MaximumMetadataBytes = 64 * 1024;
+    private const int MaximumOverviewLength = 4000;
     private const double RuntimeToleranceMinutes = 3.0;
     private const int MaximumDecodeDimension = 480;
     private const int MaximumSourceDimension = 32768;
@@ -236,7 +251,7 @@ public sealed class TmdbArtworkService
             $"{Convert.ToHexString(hash).ToLowerInvariant()}.image");
     }
 
-    public async Task<ImageSource?> LoadAsync(
+    public async Task<TmdbMediaResult?> LoadAsync(
         string? source,
         string? playbackTitle,
         bool onlineEnabled,
@@ -263,8 +278,13 @@ public sealed class TmdbArtworkService
 
                 if (runtimeCached is not null)
                 {
+                    var runtimeMetadata = await LoadCachedMetadataAsync(
+                        GetMetadataPath(runtimeCachePath),
+                        runtimeCached.Sha256,
+                        cancellationToken).ConfigureAwait(false);
+
                     await LogAsync(log, $"Artwork: TMDB cache hit for '{query.Title}' (runtime-disambiguated).").ConfigureAwait(false);
-                    return runtimeCached;
+                    return FromCache(runtimeCached, query, runtimeMetadata);
                 }
             }
 
@@ -274,8 +294,13 @@ public sealed class TmdbArtworkService
 
             if (cached is not null)
             {
+                var metadata = await LoadCachedMetadataAsync(
+                    GetMetadataPath(genericCachePath),
+                    cached.Sha256,
+                    cancellationToken).ConfigureAwait(false);
+
                 await LogAsync(log, $"Artwork: TMDB cache hit for '{query.Title}'.").ConfigureAwait(false);
-                return cached;
+                return FromCache(cached, query, metadata);
             }
         }
 
@@ -356,6 +381,17 @@ public sealed class TmdbArtworkService
                     selectedCachePath,
                     bytes,
                     cancellationToken).ConfigureAwait(false);
+
+                await SaveMetadataCacheAsync(
+                    GetMetadataPath(selectedCachePath),
+                    new TmdbCachedMetadata(
+                        match.Id,
+                        match.MediaType,
+                        match.Title,
+                        match.Year,
+                        TruncateOverview(match.Overview),
+                        Convert.ToHexString(SHA256.HashData(bytes))),
+                    cancellationToken).ConfigureAwait(false);
             }
 
             var resolution = resolvedByRuntime
@@ -364,8 +400,15 @@ public sealed class TmdbArtworkService
                     ? "TV box-set match"
                     : "direct match";
             var year = match.Year?.ToString(CultureInfo.InvariantCulture) ?? "year unknown";
-            await LogAsync(log, $"Artwork: TMDB selected '{match.Title}' ({year}, {resolution}) for '{query.Title}'.").ConfigureAwait(false);
-            return image;
+            var overviewNote = string.IsNullOrWhiteSpace(match.Overview) ? string.Empty : ", overview available";
+            await LogAsync(log, $"Artwork: TMDB selected '{match.Title}' ({year}, {resolution}{overviewNote}) for '{query.Title}'.").ConfigureAwait(false);
+            return new TmdbMediaResult(
+                image,
+                match.Id,
+                match.MediaType,
+                match.Title,
+                match.Year,
+                TruncateOverview(match.Overview));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -672,7 +715,8 @@ public sealed class TmdbArtworkService
                 title,
                 original,
                 ParseYear(date),
-                TryGetString(item, "poster_path")));
+                TryGetString(item, "poster_path"),
+                TryGetString(item, "overview")));
         }
 
         return candidates;
@@ -755,7 +799,7 @@ public sealed class TmdbArtworkService
         return total > 0 ? output.ToArray() : null;
     }
 
-    private static async Task<ImageSource?> LoadCachedAsync(string path, CancellationToken cancellationToken)
+    private static async Task<CachedPoster?> LoadCachedAsync(string path, CancellationToken cancellationToken)
     {
         try
         {
@@ -770,7 +814,9 @@ public sealed class TmdbArtworkService
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
             var image = await DecodeBytesAsync(bytes, cancellationToken).ConfigureAwait(false);
             if (image is null) TryDelete(path);
-            return image;
+            // Associate metadata with the exact byte snapshot decoded, not a later
+            // read of a path that another cache writer could already have replaced.
+            return image is null ? null : new CachedPoster(image, Convert.ToHexString(SHA256.HashData(bytes)));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -880,6 +926,105 @@ public sealed class TmdbArtworkService
             ? parsed
             : null;
 
+    private static string GetMetadataPath(string posterCachePath) =>
+        Path.ChangeExtension(posterCachePath, ".json");
+
+    private static TmdbMediaResult FromCache(
+        CachedPoster poster,
+        TmdbArtworkQuery query,
+        TmdbCachedMetadata? metadata) =>
+        new(
+            poster.Image,
+            metadata?.TmdbId,
+            metadata?.MediaType ?? string.Empty,
+            metadata?.Title ?? query.Title,
+            metadata?.Year ?? query.Year,
+            metadata?.Overview);
+
+    private static string? TruncateOverview(string? overview)
+    {
+        if (string.IsNullOrWhiteSpace(overview)) return null;
+        var trimmed = overview.Trim();
+        return trimmed.Length <= MaximumOverviewLength
+            ? trimmed
+            : trimmed[..MaximumOverviewLength];
+    }
+
+    private static async Task<TmdbCachedMetadata?> LoadCachedMetadataAsync(
+        string path,
+        string posterSha256,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            var info = new FileInfo(path);
+            if (info.Length is <= 0 or > MaximumMetadataBytes)
+            {
+                TryDelete(path);
+                return null;
+            }
+
+            var json = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+            var metadata = JsonSerializer.Deserialize<TmdbCachedMetadata>(json);
+            if (metadata is null || metadata.TmdbId <= 0 || string.IsNullOrWhiteSpace(metadata.Title) ||
+                metadata.MediaType is not ("movie" or "tv") ||
+                !string.Equals(metadata.PosterSha256, posterSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                TryDelete(path);
+                return null;
+            }
+
+            return metadata with { Overview = TruncateOverview(metadata.Overview) };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or
+                                   NotSupportedException or JsonException)
+        {
+            // Corrupt metadata never invalidates a valid cached poster.
+            return null;
+        }
+    }
+
+    private static async Task SaveMetadataCacheAsync(
+        string path,
+        TmdbCachedMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(path);
+            if (string.IsNullOrWhiteSpace(directory)) return;
+            Directory.CreateDirectory(directory);
+
+            var json = JsonSerializer.Serialize(metadata);
+            // Bound the serialized bytes, not just the overview: titles and JSON
+            // escaping can also enlarge an otherwise small metadata record.
+            if (Encoding.UTF8.GetByteCount(json) > MaximumMetadataBytes) return;
+            var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                await File.WriteAllTextAsync(temporary, json, cancellationToken).ConfigureAwait(false);
+                File.Move(temporary, path, overwrite: true);
+            }
+            finally
+            {
+                TryDelete(temporary);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            // Cache failure is non-fatal; the resolved poster and overview still apply.
+        }
+    }
+
     private static void TryDelete(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
@@ -897,4 +1042,14 @@ public sealed class TmdbArtworkService
         public string BuildPosterUrl(string posterPath) =>
             $"{BaseUrl.TrimEnd('/')}/{PosterSize}/{posterPath.TrimStart('/')}";
     }
+
+    private sealed record CachedPoster(ImageSource Image, string Sha256);
+
+    private sealed record TmdbCachedMetadata(
+        int TmdbId,
+        string MediaType,
+        string Title,
+        int? Year,
+        string? Overview,
+        string? PosterSha256);
 }

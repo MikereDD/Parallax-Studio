@@ -356,6 +356,35 @@
                                 <TextBlock Text="{Binding ProgressText}" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"/>
                                 <TextBlock Grid.Column="1" Text="{Binding RemainingText}" FontSize="10" Foreground="{DynamicResource TextMutedBrush}" Margin="8,0,0,0"/>
                             </Grid>
+                            <StackPanel Margin="0,14,0,0">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasOverview}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <Grid>
+                                    <TextBlock Text="PLOT" Style="{StaticResource EyebrowText}" VerticalAlignment="Center" />
+                                    <Button HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource CommandButton}" Content="{Binding OverviewToggleLabel}" Command="{Binding ToggleOverviewCommand}" Padding="8,3" MinHeight="0" FontSize="9" ToolTip="Show the full plot or collapse it" AutomationProperties.Name="Expand or collapse plot" />
+                                </Grid>
+                                <TextBlock Text="{Binding NowPlayingOverview}" FontSize="11" Margin="0,6,0,0" ToolTip="{Binding NowPlayingOverview}" AutomationProperties.Name="Plot overview">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource BodyText}">
+                                            <Setter Property="MaxHeight" Value="76" />
+                                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsOverviewExpanded}" Value="True">
+                                                    <Setter Property="MaxHeight" Value="Infinity" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
                             <Expander Header="Media details" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" Margin="0,16,0,0" AutomationProperties.Name="Media details">
                                 <Border Style="{StaticResource InsetBorder}" Padding="11" Margin="0,9,0,0">
                                     <StackPanel>

@@ -1,5 +1,8 @@
 ## Unreleased
 
+- adds a restrained, expandable Now Playing plot from the same confidently accepted TMDB result as its poster; local artwork stays preferred and appears without waiting for online metadata
+- caches accepted TMDB overview/identity metadata in bounded atomic JSON sidecars next to posters, preserving runtime-specific identities, offline reuse, and graceful fallback for missing/corrupt metadata; ambiguous or rejected lookups expose no plot
+
 - DVD title mapping now accepts a match only when it is unique in both directions within a 15 s runtime window; near-equal or competing titles are refused with an explicit ambiguity reason instead of being assigned by closest delta or index order
 - DVD titles left unresolved by the fixed window are matched against a per-disc runtime calibration measured from the uniquely matched titles (proportional model, ±3 s); restores 8/8 titles on Doctor Who 2018 D13 (41:59/41:47 pair and the 3:59:43 aggregate) without widening the fixed window
 - refused DVD titles raise `OpticalTitleUnavailableException`; the title browser shows the reason and logs it once instead of reporting a playback error
