@@ -74,6 +74,8 @@ public sealed class MainViewModel : ObservableObject
     private TimeSpan _artworkLookupDuration;
     private long _artworkRequestId;
     private ImageSource? _artwork;
+    private string _nowPlayingOverview = string.Empty;
+    private bool _isOverviewExpanded;
     private string? _presentationSource;
     private int _mediaGeneration;
     private int _automaticRefreshGeneration = -1;
@@ -127,6 +129,7 @@ public sealed class MainViewModel : ObservableObject
         SubtitleDelayForwardCommand = new AsyncRelayCommand(() => AdjustSubtitleDelayAsync(0.1));
         PreviousChapterCommand = new AsyncRelayCommand(() => MoveChapterAsync(-1));
         NextChapterCommand = new AsyncRelayCommand(() => MoveChapterAsync(1));
+        ToggleOverviewCommand = new RelayCommand(() => IsOverviewExpanded = !IsOverviewExpanded);
     }
 
     public event EventHandler? ToggleFullscreenRequested;
@@ -143,6 +146,32 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<string> MediaBadges { get; } = [];
     public ObservableCollection<MediaDetailRow> MediaDetails { get; } = [];
     public ImageSource? Artwork { get => _artwork; private set => SetProperty(ref _artwork, value); }
+
+    // Overview text comes only from the TMDB candidate already accepted for artwork;
+    // internal setter keeps presentation tests on the established seam.
+    public string NowPlayingOverview
+    {
+        get => _nowPlayingOverview;
+        internal set
+        {
+            if (!SetProperty(ref _nowPlayingOverview, value)) return;
+            OnPropertyChanged(nameof(HasOverview));
+        }
+    }
+
+    public bool HasOverview => !string.IsNullOrWhiteSpace(NowPlayingOverview);
+
+    public bool IsOverviewExpanded
+    {
+        get => _isOverviewExpanded;
+        private set
+        {
+            if (!SetProperty(ref _isOverviewExpanded, value)) return;
+            OnPropertyChanged(nameof(OverviewToggleLabel));
+        }
+    }
+
+    public string OverviewToggleLabel => IsOverviewExpanded ? "Show less" : "Full plot";
     public string SourceLocation => _presentationSource ?? string.Empty;
     public string MetadataStatus { get => _metadataStatus; private set => SetProperty(ref _metadataStatus, value); }
     public string NowPlayingStateText { get => _nowPlayingStateText; private set => SetProperty(ref _nowPlayingStateText, value); }
@@ -198,6 +227,7 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SubtitleDelayForwardCommand { get; }
     public ICommand PreviousChapterCommand { get; }
     public ICommand NextChapterCommand { get; }
+    public ICommand ToggleOverviewCommand { get; }
 
     public string StatusText
     {
@@ -1549,6 +1579,8 @@ public sealed class MainViewModel : ObservableObject
                     _artworkCancellation?.Dispose();
                     _artworkCancellation = new CancellationTokenSource();
                     Artwork = null;
+                    NowPlayingOverview = string.Empty;
+                    IsOverviewExpanded = false;
                 }
 
                 _artworkCancellation ??= new CancellationTokenSource();
@@ -1767,6 +1799,8 @@ public sealed class MainViewModel : ObservableObject
         _artworkLookupDuration = TimeSpan.Zero;
         _artworkRequestId++;
         Artwork = null;
+        NowPlayingOverview = string.Empty;
+        IsOverviewExpanded = false;
     }
 
     private void RestartArtworkLookup()
@@ -1777,6 +1811,8 @@ public sealed class MainViewModel : ObservableObject
         _artworkCancellation?.Dispose();
         _artworkCancellation = new CancellationTokenSource();
         Artwork = null;
+        NowPlayingOverview = string.Empty;
+        IsOverviewExpanded = false;
 
         var snapshot = _playback.Snapshot;
         _artworkLookupGeneration = _mediaGeneration;
@@ -1810,26 +1846,51 @@ public sealed class MainViewModel : ObservableObject
             {
                 artwork = await _artworkService.LoadAsync(source, cancellationToken);
                 if (artwork is not null)
+                {
+                    // Local art is usable immediately, even while optional TMDB work
+                    // is pending or fails. Apply the same stale-request guard as below.
+                    if (!_shutdown && !cancellationToken.IsCancellationRequested &&
+                        generation == _mediaGeneration && artworkRequestId == _artworkRequestId &&
+                        string.Equals(source, _playback.Snapshot.Source, StringComparison.Ordinal))
+                        Artwork = artwork;
                     await _logger.InfoAsync($"Artwork: using local artwork for '{title}'.");
+                }
             }
 
-            if (artwork is null)
-            {
-                var sourceKind = MediaPresentation.SourceKind(source);
-                TimeSpan? tmdbDuration =
-                    (sourceKind is "Blu-ray" or "DVD") && playbackDuration > TimeSpan.Zero
-                        ? playbackDuration
-                        : null;
+            // The accepted TMDB candidate also carries the plot. Local artwork still
+            // wins for the image; TMDB metadata may supply the overview regardless.
+            var sourceKind = MediaPresentation.SourceKind(source);
+            TimeSpan? tmdbDuration =
+                (sourceKind is "Blu-ray" or "DVD") && playbackDuration > TimeSpan.Zero
+                    ? playbackDuration
+                    : null;
 
-                artwork = await _tmdbArtworkService.LoadAsync(
-                    source,
-                    title,
-                    _settings.OnlineArtworkEnabled,
-                    _settings.CacheOnlineArtwork,
-                    cancellationToken,
-                    tmdbDuration,
-                    message => _logger.InfoAsync(message));
-            }
+            var tmdbResult = await _tmdbArtworkService.LoadAsync(
+                source,
+                title,
+                _settings.OnlineArtworkEnabled,
+                _settings.CacheOnlineArtwork,
+                cancellationToken,
+                tmdbDuration,
+                message => _logger.InfoAsync(message),
+                async cached =>
+                {
+                    void ApplyCachedPoster()
+                    {
+                        if (!_shutdown && !cancellationToken.IsCancellationRequested &&
+                            generation == _mediaGeneration && artworkRequestId == _artworkRequestId &&
+                            string.Equals(source, _playback.Snapshot.Source, StringComparison.Ordinal))
+                            Artwork = artwork ?? cached.Poster;
+                    }
+                    var dispatcher = Application.Current?.Dispatcher;
+                    if (dispatcher is not null && !dispatcher.CheckAccess())
+                        await dispatcher.InvokeAsync(ApplyCachedPoster);
+                    else
+                        ApplyCachedPoster();
+                });
+
+            artwork ??= tmdbResult?.Poster;
+            var overview = tmdbResult?.Overview;
 
             if (!_shutdown &&
                 !cancellationToken.IsCancellationRequested &&
@@ -1838,6 +1899,8 @@ public sealed class MainViewModel : ObservableObject
                 string.Equals(source, _playback.Snapshot.Source, StringComparison.Ordinal))
             {
                 Artwork = artwork;
+                NowPlayingOverview = overview ?? string.Empty;
+                IsOverviewExpanded = false;
             }
         }
         catch (OperationCanceledException) { }

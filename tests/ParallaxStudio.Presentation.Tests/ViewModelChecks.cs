@@ -34,6 +34,16 @@ internal static class ViewModelChecks
         {
             await vm.InitializeViewAsync();
             Check(vm.InterfaceDensity == "Comfortable", "Old settings must default to comfortable density");
+            Check(!vm.HasOverview, "Plot section must start hidden without an overview");
+            vm.NowPlayingOverview = "A linguist works with the military to communicate with alien lifeforms.";
+            Check(vm.HasOverview, "Plot section must appear when an overview is supplied");
+            Check(!vm.IsOverviewExpanded && vm.OverviewToggleLabel == "Full plot", "Plot must start collapsed with a Full plot affordance");
+            vm.ToggleOverviewCommand.Execute(null);
+            Check(vm.IsOverviewExpanded && vm.OverviewToggleLabel == "Show less", "Plot toggle must expand");
+            vm.ToggleOverviewCommand.Execute(null);
+            Check(!vm.IsOverviewExpanded && vm.OverviewToggleLabel == "Full plot", "Plot toggle must collapse again");
+            vm.NowPlayingOverview = string.Empty;
+            Check(!vm.HasOverview, "Clearing the overview must hide the plot section");
             Check(StudioAppearanceService.Motion.ReduceMotion == !SystemParameters.ClientAreaAnimation, "Initial motion must respect Windows animation preference");
             var comfortableSidebarWidth = (double)Application.Current.Resources["StudioSidebarWidth"];
             var comfortableButtonSize = (double)Application.Current.Resources["StudioIconButtonSize"];
@@ -61,6 +71,9 @@ internal static class ViewModelChecks
 
             const string first = @"C:\presentation-fixture\first.mkv";
             const string second = @"C:\presentation-fixture\second.mkv";
+            await LocalArtworkDuringMetadataAsync(Check);
+            await LocalArtworkWithCachedOverviewAsync(Check);
+            await LegacyPosterBackfillAsync(Check);
             backend.Tracks = Tracks("1920×1080 • 24 fps", "aac");
             backend.Publish(Playing(first, "First film"));
             await Task.Delay(250);
@@ -233,7 +246,7 @@ internal static class ViewModelChecks
 
             var previewIndex = Array.IndexOf(args, "--preview");
             await RenderChecksAsync(vm, backend, previewIndex >= 0 && previewIndex + 1 < args.Length
-                ? Path.GetFullPath(args[previewIndex + 1]) : null);
+                ? Path.GetFullPath(args[previewIndex + 1]) : null, Check);
             passed++;
 
             backend.Publish(backend.Snapshot with { State = PlaybackState.Stopped });
@@ -244,7 +257,171 @@ internal static class ViewModelChecks
         return passed;
     }
 
-    private static async Task RenderChecksAsync(MainViewModel vm, PlaybackDouble backend, string? directory)
+    private static async Task LocalArtworkDuringMetadataAsync(Action<bool, string> check)
+    {
+        using var fixture = new ArtworkFixture();
+        fixture.WriteImage("movie.png", 100, 150);
+        var playback = DispatchProxy.Create<IPlaybackService, PlaybackDouble>();
+        var backend = (PlaybackDouble)(object)playback;
+        var search = new TaskCompletionSource<System.Net.Http.HttpResponseMessage>();
+        using var handler = new MetadataHandler(search.Task);
+        using var http = new System.Net.Http.HttpClient(handler);
+        var vm = new MainViewModel(playback, new SettingsDouble(), new ResumeDouble(), new DiscDouble(), new LoggerDouble(), new FilePickerService());
+        typeof(MainViewModel).GetField("_tmdbArtworkService", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(vm, new TmdbArtworkService(http, "test-token", fixture.DirectoryPath));
+        try
+        {
+            await vm.InitializeViewAsync();
+            vm.OnlineArtworkEnabled = true;
+            backend.Publish(Playing(fixture.Media, "Fixture film"));
+            for (var attempt = 0; attempt < 100 && !handler.Started; attempt++) await Task.Delay(25);
+            check(handler.Started, "Synthetic metadata lookup must start");
+            check(vm.Artwork is BitmapSource { PixelWidth: 100 }, "Local artwork must appear before pending online metadata completes");
+            search.SetException(new TaskCanceledException("Synthetic HTTP timeout"));
+            await Task.Delay(100);
+            check(vm.Artwork is BitmapSource { PixelWidth: 100 } && !vm.HasOverview, "Online failure must preserve preferred local artwork without a plot");
+            vm.NowPlayingOverview = "Previous title plot";
+            vm.ToggleOverviewCommand.Execute(null);
+            backend.Publish(Playing(fixture.Media, "Refined title"));
+            check(!vm.HasOverview && !vm.IsOverviewExpanded, "Refining a title must clear its previous plot and expansion immediately");
+        }
+        finally
+        {
+            search.TrySetCanceled();
+            await vm.ShutdownAsync();
+        }
+    }
+
+    private static async Task LocalArtworkWithCachedOverviewAsync(Action<bool, string> check)
+    {
+        using var fixture = new ArtworkFixture();
+        fixture.WriteImage("movie.png", 100, 150);
+        fixture.WriteImage("remote.png", 20, 30);
+        using var handler = new AcceptedMetadataHandler(File.ReadAllBytes(fixture.PathFor("remote.png")));
+        using var http = new System.Net.Http.HttpClient(handler);
+        var playback = DispatchProxy.Create<IPlaybackService, PlaybackDouble>();
+        var backend = (PlaybackDouble)(object)playback;
+        var vm = new MainViewModel(playback, new SettingsDouble(), new ResumeDouble(), new DiscDouble(), new LoggerDouble(), new FilePickerService());
+        var field = typeof(MainViewModel).GetField("_tmdbArtworkService", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        field.SetValue(vm, new TmdbArtworkService(http, "test-token", fixture.DirectoryPath));
+        try
+        {
+            await vm.InitializeViewAsync();
+            vm.OnlineArtworkEnabled = true;
+            vm.CacheOnlineArtwork = true;
+            backend.Publish(Playing(fixture.Media, "Fixture film"));
+            for (var attempt = 0; attempt < 100 && !vm.HasOverview; attempt++) await Task.Delay(25);
+            check(vm.NowPlayingOverview == "Accepted fixture plot." && vm.Artwork is BitmapSource { PixelWidth: 100 },
+                "Accepted TMDB overview must accompany preferred local art, not replace it with the remote poster");
+            check(handler.Calls == 3, "Overview must use the artwork search, configuration, and download without a separate metadata lookup");
+            vm.ToggleOverviewCommand.Execute(null);
+            backend.Publish(backend.Snapshot with { State = PlaybackState.Paused, Position = TimeSpan.FromMinutes(12) });
+            check(vm.NowPlayingOverview == "Accepted fixture plot." && vm.IsOverviewExpanded && handler.Calls == 3,
+                "Pause and seek must preserve the current overview and expansion without another lookup");
+            field.SetValue(vm, new TmdbArtworkService(http, null, fixture.DirectoryPath));
+            handler.Offline = true;
+            backend.Publish(Playing(fixture.PathFor("second.mkv"), "Uncached film"));
+            check(!vm.HasOverview, "Source change must clear the accepted plot immediately");
+            backend.Publish(Playing(fixture.Media, "Fixture film"));
+            for (var attempt = 0; attempt < 100 && !vm.HasOverview; attempt++) await Task.Delay(25);
+            check(vm.NowPlayingOverview == "Accepted fixture plot." && vm.Artwork is BitmapSource { PixelWidth: 100 },
+                "Offline cache must restore accepted plot alongside local artwork");
+            check(handler.Calls == 3, "Offline reload must not issue HTTP");
+            vm.ToggleOverviewCommand.Execute(null);
+            backend.Publish(backend.Snapshot with { State = PlaybackState.Stopped });
+            check(!vm.HasOverview && !vm.IsOverviewExpanded, "Stop must clear plot and expansion state");
+        }
+        finally { await vm.ShutdownAsync(); }
+    }
+
+    private static async Task LegacyPosterBackfillAsync(Action<bool, string> check)
+    {
+        using var fixture = new ArtworkFixture();
+        fixture.WriteImage("legacy.png", 100, 150);
+        var bytes = File.ReadAllBytes(fixture.PathFor("legacy.png"));
+        var search = new TaskCompletionSource<System.Net.Http.HttpResponseMessage>();
+        using var handler = new MetadataHandler(search.Task);
+        using var http = new System.Net.Http.HttpClient(handler);
+        var service = new TmdbArtworkService(http, "test-token", fixture.DirectoryPath);
+        var posterPath = service.GetCachePath(TmdbArtworkQuery.Create(fixture.Media, "Fixture film")!);
+        await File.WriteAllBytesAsync(posterPath, bytes);
+        var metadataPath = Path.ChangeExtension(posterPath, ".json");
+        check(!File.Exists(metadataPath), "Legacy regression must start with a poster and no metadata sidecar");
+        var playback = DispatchProxy.Create<IPlaybackService, PlaybackDouble>();
+        var backend = (PlaybackDouble)(object)playback;
+        var vm = new MainViewModel(playback, new SettingsDouble(), new ResumeDouble(), new DiscDouble(), new LoggerDouble(), new FilePickerService());
+        var field = typeof(MainViewModel).GetField("_tmdbArtworkService", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        field.SetValue(vm, service);
+        try
+        {
+            await vm.InitializeViewAsync();
+            vm.OnlineArtworkEnabled = true;
+            vm.CacheOnlineArtwork = true;
+            backend.Publish(Playing(fixture.Media, "Fixture film"));
+            for (var attempt = 0; attempt < 100 && vm.Artwork is null; attempt++) await Task.Delay(25);
+            var cachedPoster = vm.Artwork;
+            check(cachedPoster is BitmapSource { PixelWidth: 100 } && !vm.HasOverview && !search.Task.IsCompleted,
+                "Legacy cached poster must be visible before metadata HTTP is released");
+            for (var attempt = 0; attempt < 100 && !handler.Started; attempt++) await Task.Delay(25);
+            check(handler.Started, "Legacy poster-only hit must still perform normal online TMDB resolution");
+            search.SetResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK) {
+                Content = new System.Net.Http.StringContent("""{"results":[{"id":123,"title":"Fixture film","original_title":"Fixture film","release_date":"2016-01-01","poster_path":"/fixture.png","overview":"Accepted fixture plot."}]}""") });
+            for (var attempt = 0; attempt < 100 && !vm.HasOverview; attempt++) await Task.Delay(25);
+            check(vm.NowPlayingOverview == "Accepted fixture plot." && ReferenceEquals(vm.Artwork, cachedPoster),
+                "Accepted backfill plot must reach ViewModel without replacing or losing its cached poster");
+            check((await File.ReadAllBytesAsync(posterPath)).SequenceEqual(bytes), "Backfill must preserve existing poster bytes");
+            using (var metadata = JsonDocument.Parse(await File.ReadAllTextAsync(metadataPath)))
+            {
+                check(metadata.RootElement.GetProperty("PosterSha256").GetString() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)),
+                    "Backfilled sidecar must bind to the original cached poster bytes");
+            }
+            field.SetValue(vm, new TmdbArtworkService(http, null, fixture.DirectoryPath));
+            backend.Publish(Playing(fixture.PathFor("second.mkv"), "Uncached film"));
+            check(!vm.HasOverview, "Switching away from backfilled title must clear the plot immediately");
+            backend.Publish(Playing(fixture.Media, "Fixture film"));
+            for (var attempt = 0; attempt < 100 && !vm.HasOverview; attempt++) await Task.Delay(25);
+            check(vm.NowPlayingOverview == "Accepted fixture plot." && vm.Artwork is BitmapSource { PixelWidth: 100 },
+                "A subsequent token-free cache load must restore the legacy poster and backfilled overview");
+            check(handler.Calls == 1, "Backfill must use only the normal authenticated candidate search; offline reload must issue no HTTP");
+        }
+        finally
+        {
+            search.TrySetCanceled();
+            await vm.ShutdownAsync();
+        }
+    }
+
+    private sealed class AcceptedMetadataHandler(byte[] poster) : System.Net.Http.HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+        public bool Offline { get; set; }
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken token)
+        {
+            Calls++;
+            if (Offline) throw new InvalidOperationException("Offline integration must not issue HTTP");
+            var path = request.RequestUri!.AbsolutePath;
+            System.Net.Http.HttpContent content = path.Contains("/search/movie", StringComparison.Ordinal)
+                ? new System.Net.Http.StringContent("""{"results":[{"id":123,"title":"Fixture film","original_title":"Fixture film","release_date":"2016-01-01","poster_path":"/fixture.png","overview":"Accepted fixture plot."}]}""")
+                : path.EndsWith("/configuration", StringComparison.Ordinal)
+                    ? new System.Net.Http.StringContent("""{"images":{"secure_base_url":"https://image.tmdb.org/t/p/","poster_sizes":["w500"]}}""")
+                    : new System.Net.Http.ByteArrayContent(poster);
+            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content });
+        }
+    }
+
+    private sealed class MetadataHandler(Task<System.Net.Http.HttpResponseMessage> response) : System.Net.Http.HttpMessageHandler
+    {
+        public bool Started { get; private set; }
+        public int Calls { get; private set; }
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken token)
+        {
+            Calls++;
+            Started = true;
+            return response.WaitAsync(token);
+        }
+    }
+
+    private static async Task RenderChecksAsync(MainViewModel vm, PlaybackDouble backend, string? directory, Action<bool, string> check)
     {
         if (directory is not null) Directory.CreateDirectory(directory);
         vm.CinemaAutoExpand = false;
@@ -258,6 +435,56 @@ internal static class ViewModelChecks
         try
         {
             var content = (FrameworkElement)window.Content;
+            vm.SelectedTheme = "Dark Monochrome";
+            vm.InterfaceDensity = "Comfortable";
+            async Task LayoutAsync()
+            {
+                await content.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+                content.Measure(new Size(1380, 860));
+                content.Arrange(new Rect(0, 0, 1380, 860));
+                content.UpdateLayout();
+            }
+            void SavePlot(string name)
+            {
+                if (directory is null) return;
+                var bitmap = new RenderTargetBitmap(1380, 860, 96, 96, PixelFormats.Pbgra32);
+                bitmap.Render(content);
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                using var file = File.Create(Path.Combine(directory, name + ".png"));
+                encoder.Save(file);
+            }
+            await LayoutAsync();
+            var plot = Descendants(content).OfType<TextBlock>().Single(block =>
+                System.Windows.Automation.AutomationProperties.GetName(block) == "Plot overview");
+            var section = (StackPanel)plot.Parent;
+            check(section.Visibility == Visibility.Collapsed, "Rendered plot section must collapse without metadata");
+            SavePlot("Plot-none");
+            vm.NowPlayingOverview = "A linguist is recruited to communicate with mysterious visitors. As the team studies their language, she must decide what to trust.";
+            await LayoutAsync();
+            check(section.Visibility == Visibility.Visible && plot.Text == vm.NowPlayingOverview, "Rendered plot must display the supplied overview");
+            check(plot.TextWrapping == TextWrapping.Wrap && plot.FontWeight == FontWeights.Normal, "Plot must use normal-weight wrapping text");
+            check(Equals(plot.Foreground, Application.Current.Resources["TextSecondaryBrush"]), "Plot foreground must use the current theme");
+            SavePlot("Plot-normal");
+            vm.NowPlayingOverview = string.Join(" ", Enumerable.Repeat("This long synthetic overview exercises wrapping, expansion, and the sidebar's scrolling layout without using personal media.", 12));
+            await LayoutAsync();
+            var collapsedHeight = plot.ActualHeight;
+            check(collapsedHeight is > 50 and <= 76, "Long plot must initially be constrained to roughly four lines");
+            SavePlot("Plot-long-collapsed");
+            vm.ToggleOverviewCommand.Execute(null);
+            await LayoutAsync();
+            check(double.IsPositiveInfinity(plot.MaxHeight) && plot.ActualHeight > collapsedHeight, "Expanding must reveal additional plot lines");
+            SavePlot("Plot-long-expanded");
+            vm.ToggleOverviewCommand.Execute(null);
+            await LayoutAsync();
+            check(plot.ActualHeight <= 76, "Collapsing must restore the restrained plot height");
+            foreach (var empty in new string?[] { null, string.Empty, "   " })
+            {
+                vm.NowPlayingOverview = empty!;
+                await LayoutAsync();
+                check(section.Visibility == Visibility.Collapsed, "Null, empty, or whitespace plots must collapse the actual section");
+            }
+            vm.NowPlayingOverview = "A linguist is recruited to communicate with mysterious visitors. As the team studies their language, she must decide what to trust.";
             foreach (var density in new[] { "Comfortable", "Compact" })
             foreach (var theme in StudioAppearanceService.Themes)
             {
@@ -294,6 +521,16 @@ internal static class ViewModelChecks
             PresentationTraceSources.DataBindingSource.Listeners.Remove(errors);
             // Never show the window or create/attach a native playback surface.
             window.Content = null;
+        }
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            yield return child;
+            foreach (var descendant in Descendants(child)) yield return descendant;
         }
     }
 
