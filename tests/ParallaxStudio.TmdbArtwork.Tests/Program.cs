@@ -46,7 +46,12 @@ internal static class Program
             ("oversized metadata preserves poster without plot", OversizedMetadataAsync),
             ("cached overview is normalized and bounded", CachedOverviewBoundsAsync),
             ("failed metadata replacement never pairs old plot with new poster", FailedMetadataReplacementAsync),
-            ("unverifiable poster association preserves poster without metadata", UnverifiablePosterAssociationAsync)
+            ("unverifiable poster association preserves poster without metadata", UnverifiablePosterAssociationAsync),
+            ("legacy poster publishes before authenticated metadata backfill", LegacyBackfillPublishesBeforeSearchAsync),
+            ("invalid legacy sidecars backfill only accepted metadata", LegacyInvalidSidecarsBackfillAsync),
+            ("legacy backfill refuses ambiguous and inexact candidates", LegacyBackfillRefusesCandidatesAsync),
+            ("unavailable legacy backfill preserves cached artwork", LegacyBackfillUnavailableAsync),
+            ("legacy runtime backfill isolates metadata and preserves bytes", LegacyRuntimeBackfillAsync)
         };
 
         var failed = 0;
@@ -1001,7 +1006,9 @@ internal static class Program
         using var temp = new TempDirectory();
         var handler = new FakeHandler(_ => throw new InvalidOperationException("unverifiable metadata must not trigger HTTP"));
         using var http = new HttpClient(handler);
-        var service = new TmdbArtworkService(http, "test-token", temp.Path);
+        // Keep association/integrity validation genuinely cache-only. Authenticated
+        // legacy backfill is exercised separately without weakening these checks.
+        var service = new TmdbArtworkService(http, null, temp.Path);
         var posterPath = service.GetCachePath(TmdbArtworkQuery.Create(@"C:\Movies\Arrival.mkv", "Arrival")!);
         await File.WriteAllBytesAsync(posterPath, TinyPng);
         var matchingHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(TinyPng));
@@ -1021,6 +1028,261 @@ internal static class Program
                 Expect(cached!.TmdbId is null && cached.Overview is null, "missing, malformed, or mismatched digest must not expose identity or plot");
         }
         Expect(handler.Calls == 0, "association validation must not request a replacement lookup");
+    }
+
+
+    private const string LegacyArrivalSource = @"C:\Movies\Arrival [2016].mkv";
+    private const string LegacyArrivalTitle = "Arrival [2016]";
+    private const string AcceptedLegacyArrival = """{"results":[{"id":329865,"title":"Arrival","original_title":"Arrival","release_date":"2016-11-10","poster_path":"/never-download.jpg","overview":"Accepted legacy plot."}]}""";
+
+    private static void ExpectAuthenticatedApi(HttpRequestMessage request)
+    {
+        Expect(request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter == "fake-legacy-token", "backfill must use the configured Bearer token");
+        Expect(request.Method == HttpMethod.Get && request.RequestUri!.Host == "api.themoviedb.org",
+            "backfill must use the normal TMDB API, never an image download");
+    }
+
+    private static async Task ExpectLegacySidecarAsync(string posterPath, int id, string overview)
+    {
+        var bytes = await File.ReadAllBytesAsync(posterPath);
+        Expect(bytes.SequenceEqual(TinyPng), "legacy backfill must preserve exact cached poster bytes");
+        using var metadata = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.ChangeExtension(posterPath, ".json")));
+        var root = metadata.RootElement;
+        Expect(root.GetProperty("TmdbId").GetInt32() == id && root.GetProperty("Overview").GetString() == overview,
+            "sidecar must contain only the accepted candidate identity and plot");
+        Expect(root.GetProperty("PosterSha256").GetString() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)),
+            "sidecar digest must bind to the exact original cached image bytes");
+        Expect(!Directory.EnumerateFiles(Path.GetDirectoryName(posterPath)!, "*.tmp").Any(), "backfill must leave no temporary files");
+    }
+
+    private static async Task LegacyBackfillPublishesBeforeSearchAsync()
+    {
+        using var temp = new TempDirectory();
+        var published = new TaskCompletionSource<TmdbMediaResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbacks = 0;
+        var handler = new FakeHandler(async (request, cancellation) =>
+        {
+            ExpectAuthenticatedApi(request);
+            Expect(request.RequestUri!.AbsolutePath == "/3/search/movie" && request.RequestUri.Query.Contains("year=2016", StringComparison.Ordinal),
+                "legacy backfill must perform the ordinary year-qualified movie search only");
+            Expect(published.Task.IsCompletedSuccessfully, "cached poster callback must precede HTTP");
+            started.TrySetResult();
+            return await release.Task.WaitAsync(cancellation);
+        });
+        using var http = new HttpClient(handler);
+        var service = new TmdbArtworkService(http, "fake-legacy-token", temp.Path);
+        var poster = service.GetCachePath(TmdbArtworkQuery.Create(LegacyArrivalSource, LegacyArrivalTitle)!);
+        await File.WriteAllBytesAsync(poster, TinyPng);
+        Expect(!File.Exists(Path.ChangeExtension(poster, ".json")), "fixture must start as a legacy .image without JSON");
+        var load = service.LoadAsync(LegacyArrivalSource, LegacyArrivalTitle, true, true, cachedPosterAvailable: cached =>
+        {
+            callbacks++;
+            published.TrySetResult(cached);
+            return Task.CompletedTask;
+        });
+        try
+        {
+            var early = await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Expect(early.Poster is System.Windows.Media.Imaging.BitmapSource { IsFrozen: true, PixelWidth: 2 } && early.Overview is null && early.TmdbId is null,
+                "callback must publish usable frozen legacy artwork without invented plot/identity");
+            Expect(!load.IsCompleted && !release.Task.IsCompleted, "positive control: metadata remains blocked while cached art is available");
+            release.SetResult(Json(AcceptedLegacyArrival));
+            var final = await load.WaitAsync(TimeSpan.FromSeconds(5));
+            Expect(final?.TmdbId == 329865 && final.Overview == "Accepted legacy plot." && ReferenceEquals(final.Poster, early.Poster),
+                "accepted metadata must enrich the exact same frozen cached poster");
+            Expect(callbacks == 1 && handler.Calls == 1, "backfill must publish once and issue only one authenticated search");
+            await ExpectLegacySidecarAsync(poster, 329865, "Accepted legacy plot.");
+            Expect(Directory.EnumerateFiles(temp.Path).Count() == 2, "backfill must write only the original poster and its sidecar");
+            var offlineHandler = new FakeHandler(_ => throw new InvalidOperationException("offline reload must not issue HTTP"));
+            using var offlineHttp = new HttpClient(offlineHandler);
+            var offline = new TmdbArtworkService(offlineHttp, null, temp.Path);
+            var restored = await offline.LoadAsync(LegacyArrivalSource, LegacyArrivalTitle, false, true);
+            Expect(restored?.TmdbId == 329865 && restored.Overview == "Accepted legacy plot." && restored.Poster is System.Windows.Media.Imaging.BitmapSource { IsFrozen: true },
+                "fresh disabled/token-free service must restore cached poster and plot");
+            Expect(offlineHandler.Calls == 0, "fresh offline service must issue zero HTTP");
+        }
+        finally { release.TrySetCanceled(); }
+    }
+
+    private static async Task LegacyInvalidSidecarsBackfillAsync()
+    {
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(TinyPng));
+        var invalid = new[] {
+            "{broken json",
+            System.Text.Json.JsonSerializer.Serialize(new { TmdbId = 9, MediaType = "person", Title = "Arrival", Overview = "Never expose invalid plot.", PosterSha256 = hash }),
+            new string('X', 65537),
+            System.Text.Json.JsonSerializer.Serialize(new { TmdbId = 9, MediaType = "movie", Title = "Arrival", Overview = "Never expose mismatched plot.", PosterSha256 = new string('0', 64) })
+        };
+        foreach (var json in invalid)
+        {
+            using var temp = new TempDirectory();
+            TmdbMediaResult? published = null;
+            var callbacks = 0;
+            var handler = new FakeHandler(request =>
+            {
+                ExpectAuthenticatedApi(request);
+                Expect(request.RequestUri!.AbsolutePath == "/3/search/movie", "invalid metadata must not cause poster/configuration requests");
+                Expect(published is not null, "invalid metadata must still publish cached art before HTTP");
+                return Json(AcceptedLegacyArrival);
+            });
+            using var http = new HttpClient(handler);
+            var service = new TmdbArtworkService(http, "fake-legacy-token", temp.Path);
+            var poster = service.GetCachePath(TmdbArtworkQuery.Create(LegacyArrivalSource, LegacyArrivalTitle)!);
+            await File.WriteAllBytesAsync(poster, TinyPng);
+            await File.WriteAllTextAsync(Path.ChangeExtension(poster, ".json"), json);
+            var result = await service.LoadAsync(LegacyArrivalSource, LegacyArrivalTitle, true, true, cachedPosterAvailable: cached =>
+            {
+                callbacks++;
+                published = cached;
+                return Task.CompletedTask;
+            });
+            Expect(published?.Overview is null && published?.TmdbId is null && published?.Poster is System.Windows.Media.Imaging.BitmapSource { IsFrozen: true },
+                "corrupt, invalid, oversized or mismatched sidecars must never publish stale metadata");
+            Expect(result?.Overview == "Accepted legacy plot." && ReferenceEquals(result.Poster, published?.Poster), "accepted backfill must retain published artwork");
+            Expect(callbacks == 1 && handler.Calls == 1, "each invalid-sidecar backfill needs one callback and one search");
+            await ExpectLegacySidecarAsync(poster, 329865, "Accepted legacy plot.");
+        }
+    }
+
+    private static async Task LegacyBackfillRefusesCandidatesAsync()
+    {
+        foreach (var scenario in new[] { "ambiguous", "fuzzy", "wrong-year", "dvd-tv-ambiguous" })
+        {
+            using var temp = new TempDirectory();
+            var dvd = scenario == "dvd-tv-ambiguous";
+            var source = dvd ? @"DVD disc • D:\ • DVD title 1" : LegacyArrivalSource;
+            var title = dvd ? "DR WHO COMPLETE SERIES 2018 D13 — 13 chapter(s), 2.1 GB (C1)" : LegacyArrivalTitle;
+            TmdbMediaResult? published = null;
+            var handler = new FakeHandler(request =>
+            {
+                ExpectAuthenticatedApi(request);
+                var path = request.RequestUri!.AbsolutePath;
+                if (path == "/3/search/movie")
+                    return Json(scenario switch {
+                        "ambiguous" => """{"results":[{"id":1,"title":"Arrival","original_title":"Arrival","release_date":"2016-01-01","poster_path":"/a.jpg","overview":"Wrong A."},{"id":2,"title":"Arrival","original_title":"Arrival","release_date":"2016-02-01","poster_path":"/b.jpg","overview":"Wrong B."}]}""",
+                        "fuzzy" => """{"results":[{"id":1,"title":"The Arrival","original_title":"The Arrival","release_date":"2016-01-01","poster_path":"/a.jpg","overview":"Fuzzy plot."}]}""",
+                        "wrong-year" => """{"results":[{"id":1,"title":"Arrival","original_title":"Arrival","release_date":"1996-01-01","poster_path":"/a.jpg","overview":"Wrong year plot."}]}""",
+                        _ => """{"results":[]}"""
+                    });
+                if (path == "/3/search/tv" && scenario != "ambiguous")
+                    return Json(dvd && request.RequestUri.Query.Contains("query=DR%20WHO&", StringComparison.Ordinal)
+                        ? """{"results":[{"id":1,"name":"Doctor Who","original_name":"Doctor Who","first_air_date":"2005-01-01","poster_path":"/a.jpg","overview":"TV A."},{"id":2,"name":"Doctor Who","original_name":"Doctor Who","first_air_date":"1963-01-01","poster_path":"/b.jpg","overview":"TV B."}]}"""
+                        : """{"results":[]}""");
+                if (dvd && (path == "/3/tv/1" || path == "/3/tv/2"))
+                    return Json("""{"seasons":[{"season_number":1,"air_date":"2018-01-01","episode_count":10}]}""");
+                throw new InvalidOperationException("refused legacy backfill must not request images, movie-ambiguity TV fallback, or unrelated details");
+            });
+            using var http = new HttpClient(handler);
+            var service = new TmdbArtworkService(http, "fake-legacy-token", temp.Path);
+            var poster = service.GetCachePath(TmdbArtworkQuery.Create(source, title)!);
+            await File.WriteAllBytesAsync(poster, TinyPng);
+            var result = await service.LoadAsync(source, title, true, true, cachedPosterAvailable: cached => { published = cached; return Task.CompletedTask; });
+            Expect(published is not null && ReferenceEquals(result, published) && result.Overview is null && result.TmdbId is null,
+                $"{scenario}: refusal must preserve published poster without candidate metadata");
+            Expect(handler.Calls > 0 && (scenario != "ambiguous" || handler.Calls == 1), "movie ambiguity must stop after the normal search");
+            if (dvd) Expect(handler.Urls.Any(url => url.Contains("/tv/1?", StringComparison.Ordinal)) && handler.Urls.Any(url => url.Contains("/tv/2?", StringComparison.Ordinal)),
+                "TV ambiguity fixture must actually inspect both same-season-year series");
+            Expect(Directory.EnumerateFiles(temp.Path).SequenceEqual(new[] { poster }), "refusal must leave only original poster, no sidecar or temp");
+            Expect((await File.ReadAllBytesAsync(poster)).SequenceEqual(TinyPng), "refusal must not change poster bytes");
+        }
+    }
+
+    private static async Task LegacyBackfillUnavailableAsync()
+    {
+        foreach (var mode in new[] { "disabled", "token-free", "unavailable", "failure", "timeout" })
+        {
+            using var temp = new TempDirectory();
+            TmdbMediaResult? published = null;
+            var callbacks = 0;
+            var handler = new FakeHandler(request =>
+            {
+                ExpectAuthenticatedApi(request);
+                Expect(published is not null && request.RequestUri!.AbsolutePath is "/3/search/movie" or "/3/search/tv",
+                    "optional failure must occur only after cached artwork is published, using normal candidate searches only");
+                if (mode == "failure") throw new HttpRequestException("fixture offline");
+                if (mode == "timeout") throw new TaskCanceledException("fixture HTTP timeout", new TimeoutException());
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            });
+            using var http = new HttpClient(handler);
+            var service = new TmdbArtworkService(http, mode == "token-free" ? null : "fake-legacy-token", temp.Path);
+            var poster = service.GetCachePath(TmdbArtworkQuery.Create(LegacyArrivalSource, LegacyArrivalTitle)!);
+            await File.WriteAllBytesAsync(poster, TinyPng);
+            var result = await service.LoadAsync(LegacyArrivalSource, LegacyArrivalTitle, mode != "disabled", true, cachedPosterAvailable: cached =>
+            {
+                callbacks++;
+                published = cached;
+                return Task.CompletedTask;
+            });
+            Expect(result?.Poster is System.Windows.Media.Imaging.BitmapSource { IsFrozen: true } && result.Overview is null && result.TmdbId is null,
+                $"{mode}: optional metadata unavailability must preserve usable art without errors or plot");
+            var cacheOnly = mode is "disabled" or "token-free";
+            Expect(cacheOnly ? handler.Calls == 0 && callbacks == 0 : handler.Calls > 0 && callbacks == 1 && ReferenceEquals(result, published),
+                "cache-only loads return directly; attempted backfill must publish once and preserve the same result on failure");
+            Expect(Directory.EnumerateFiles(temp.Path).SequenceEqual(new[] { poster }) && (await File.ReadAllBytesAsync(poster)).SequenceEqual(TinyPng),
+                "optional failure must not write metadata or change legacy bytes");
+        }
+    }
+
+    private static async Task LegacyRuntimeBackfillAsync()
+    {
+        using var temp = new TempDirectory();
+        const string source = @"Blu-ray disc • D:\";
+        const string title = "The Road - Blu-ray™";
+        const string candidates = """{"results":[{"id":20766,"title":"The Road","original_title":"The Road","release_date":"2009-11-25","poster_path":"/a.jpg","overview":"The 2009 plot."},{"id":810163,"title":"The Road","original_title":"The Road","release_date":"2017-10-31","poster_path":"/b.jpg","overview":"The 2017 plot."}]}""";
+        var unique = false;
+        var handler = new FakeHandler(request =>
+        {
+            ExpectAuthenticatedApi(request);
+            return request.RequestUri!.AbsolutePath switch {
+                "/3/search/movie" => Json(unique ? """{"results":[{"id":20766,"title":"The Road","original_title":"The Road","release_date":"2009-11-25","poster_path":"/a.jpg","overview":"The 2009 plot."}]}""" : candidates),
+                "/3/movie/20766" => Json("""{"runtime":111}"""),
+                "/3/movie/810163" => Json("""{"runtime":20}"""),
+                _ => throw new InvalidOperationException("runtime backfill must not download art or fall through to TV")
+            };
+        });
+        using var http = new HttpClient(handler);
+        var service = new TmdbArtworkService(http, "fake-legacy-token", temp.Path);
+        var generic = service.GetCachePath(TmdbArtworkQuery.Create(source, title)!);
+        await File.WriteAllBytesAsync(generic, TinyPng);
+        var runtimePosters = new List<string>();
+        foreach (var (minutes, id, plot) in new[] { (111, 20766, "The 2009 plot."), (20, 810163, "The 2017 plot.") })
+        {
+            TmdbMediaResult? early = null;
+            var result = await service.LoadAsync(source, title, true, true, playbackDuration: TimeSpan.FromMinutes(minutes),
+                cachedPosterAvailable: cached => { early = cached; return Task.CompletedTask; });
+            Expect(early?.Overview is null && result?.TmdbId == id && result.Overview == plot && ReferenceEquals(early?.Poster, result.Poster),
+                "each runtime must resolve its own accepted candidate while retaining generic cached artwork");
+            var added = Directory.EnumerateFiles(temp.Path, "*.image").Except(runtimePosters).Where(path => path != generic).ToArray();
+            Expect(added.Length == 1, "each resolved runtime must create one distinct runtime poster copy");
+            runtimePosters.Add(added[0]);
+            await ExpectLegacySidecarAsync(added[0], id, plot);
+            Expect(!File.Exists(Path.ChangeExtension(generic, ".json")), "runtime backfill must never poison generic metadata");
+        }
+        Expect(handler.Calls == 6, "two runtime resolutions must each use only search plus two candidate runtime details");
+        // Existing runtime-specific legacy art must stay runtime-specific even when
+        // the subsequent online response happens to be unambiguous.
+        File.Delete(Path.ChangeExtension(runtimePosters[0], ".json"));
+        unique = true;
+        var refreshed = await service.LoadAsync(source, title, true, true, playbackDuration: TimeSpan.FromMinutes(111));
+        Expect(refreshed?.TmdbId == 20766 && handler.Calls == 7, "runtime legacy entry must support an ordinary unambiguous backfill");
+        await ExpectLegacySidecarAsync(runtimePosters[0], 20766, "The 2009 plot.");
+        Expect(!File.Exists(Path.ChangeExtension(generic, ".json")), "unambiguous runtime-entry backfill must not write generic metadata");
+        var offlineHandler = new FakeHandler(_ => throw new InvalidOperationException("offline runtime reload must not issue HTTP"));
+        using var offlineHttp = new HttpClient(offlineHandler);
+        var offline = new TmdbArtworkService(offlineHttp, null, temp.Path);
+        foreach (var (minutes, id, plot) in new[] { (111, 20766, "The 2009 plot."), (20, 810163, "The 2017 plot.") })
+        {
+            var cached = await offline.LoadAsync(@"Blu-ray disc • E:\", title, false, true, playbackDuration: TimeSpan.FromMinutes(minutes));
+            Expect(cached?.TmdbId == id && cached.Overview == plot, "offline runtime reload must restore only that duration's accepted plot");
+        }
+        var wrongRuntime = await offline.LoadAsync(source, title, false, true, playbackDuration: TimeSpan.FromMinutes(60));
+        Expect(wrongRuntime is not null && wrongRuntime.TmdbId is null && wrongRuntime.Overview is null, "unknown runtime may use generic art but must never inherit another runtime's metadata");
+        Expect(offlineHandler.Calls == 0 && Directory.EnumerateFiles(temp.Path).Count() == 5, "offline reload must use zero HTTP and leave only generic art and two runtime pairs");
+        Expect((await File.ReadAllBytesAsync(generic)).SequenceEqual(TinyPng), "runtime backfill must preserve generic poster bytes too");
     }
 
     private static FakeHandler HappySearchHandler(byte[] posterBytes) => new(request =>

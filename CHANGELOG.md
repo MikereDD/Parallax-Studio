@@ -1,5 +1,6 @@
 ## Unreleased
 
+- fixes legacy TMDB poster-only caches never acquiring a plot: cached artwork is published before optional conservative metadata backfill, without replacing the poster or requiring manual cache clearing
 - adds a restrained, expandable Now Playing plot from the same confidently accepted TMDB result as its poster; local artwork stays preferred and appears without waiting for online metadata
 - caches accepted TMDB overview/identity metadata in bounded atomic JSON sidecars next to posters, preserving runtime-specific identities, offline reuse, and graceful fallback for missing/corrupt metadata; ambiguous or rejected lookups expose no plot
 

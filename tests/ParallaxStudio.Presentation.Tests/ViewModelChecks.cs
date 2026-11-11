@@ -73,6 +73,7 @@ internal static class ViewModelChecks
             const string second = @"C:\presentation-fixture\second.mkv";
             await LocalArtworkDuringMetadataAsync(Check);
             await LocalArtworkWithCachedOverviewAsync(Check);
+            await LegacyPosterBackfillAsync(Check);
             backend.Tracks = Tracks("1920×1080 • 24 fps", "aac");
             backend.Publish(Playing(first, "First film"));
             await Task.Delay(250);
@@ -333,6 +334,63 @@ internal static class ViewModelChecks
         finally { await vm.ShutdownAsync(); }
     }
 
+    private static async Task LegacyPosterBackfillAsync(Action<bool, string> check)
+    {
+        using var fixture = new ArtworkFixture();
+        fixture.WriteImage("legacy.png", 100, 150);
+        var bytes = File.ReadAllBytes(fixture.PathFor("legacy.png"));
+        var search = new TaskCompletionSource<System.Net.Http.HttpResponseMessage>();
+        using var handler = new MetadataHandler(search.Task);
+        using var http = new System.Net.Http.HttpClient(handler);
+        var service = new TmdbArtworkService(http, "test-token", fixture.DirectoryPath);
+        var posterPath = service.GetCachePath(TmdbArtworkQuery.Create(fixture.Media, "Fixture film")!);
+        await File.WriteAllBytesAsync(posterPath, bytes);
+        var metadataPath = Path.ChangeExtension(posterPath, ".json");
+        check(!File.Exists(metadataPath), "Legacy regression must start with a poster and no metadata sidecar");
+        var playback = DispatchProxy.Create<IPlaybackService, PlaybackDouble>();
+        var backend = (PlaybackDouble)(object)playback;
+        var vm = new MainViewModel(playback, new SettingsDouble(), new ResumeDouble(), new DiscDouble(), new LoggerDouble(), new FilePickerService());
+        var field = typeof(MainViewModel).GetField("_tmdbArtworkService", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        field.SetValue(vm, service);
+        try
+        {
+            await vm.InitializeViewAsync();
+            vm.OnlineArtworkEnabled = true;
+            vm.CacheOnlineArtwork = true;
+            backend.Publish(Playing(fixture.Media, "Fixture film"));
+            for (var attempt = 0; attempt < 100 && vm.Artwork is null; attempt++) await Task.Delay(25);
+            var cachedPoster = vm.Artwork;
+            check(cachedPoster is BitmapSource { PixelWidth: 100 } && !vm.HasOverview && !search.Task.IsCompleted,
+                "Legacy cached poster must be visible before metadata HTTP is released");
+            for (var attempt = 0; attempt < 100 && !handler.Started; attempt++) await Task.Delay(25);
+            check(handler.Started, "Legacy poster-only hit must still perform normal online TMDB resolution");
+            search.SetResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK) {
+                Content = new System.Net.Http.StringContent("""{"results":[{"id":123,"title":"Fixture film","original_title":"Fixture film","release_date":"2016-01-01","poster_path":"/fixture.png","overview":"Accepted fixture plot."}]}""") });
+            for (var attempt = 0; attempt < 100 && !vm.HasOverview; attempt++) await Task.Delay(25);
+            check(vm.NowPlayingOverview == "Accepted fixture plot." && ReferenceEquals(vm.Artwork, cachedPoster),
+                "Accepted backfill plot must reach ViewModel without replacing or losing its cached poster");
+            check((await File.ReadAllBytesAsync(posterPath)).SequenceEqual(bytes), "Backfill must preserve existing poster bytes");
+            using (var metadata = JsonDocument.Parse(await File.ReadAllTextAsync(metadataPath)))
+            {
+                check(metadata.RootElement.GetProperty("PosterSha256").GetString() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)),
+                    "Backfilled sidecar must bind to the original cached poster bytes");
+            }
+            field.SetValue(vm, new TmdbArtworkService(http, null, fixture.DirectoryPath));
+            backend.Publish(Playing(fixture.PathFor("second.mkv"), "Uncached film"));
+            check(!vm.HasOverview, "Switching away from backfilled title must clear the plot immediately");
+            backend.Publish(Playing(fixture.Media, "Fixture film"));
+            for (var attempt = 0; attempt < 100 && !vm.HasOverview; attempt++) await Task.Delay(25);
+            check(vm.NowPlayingOverview == "Accepted fixture plot." && vm.Artwork is BitmapSource { PixelWidth: 100 },
+                "A subsequent token-free cache load must restore the legacy poster and backfilled overview");
+            check(handler.Calls == 1, "Backfill must use only the normal authenticated candidate search; offline reload must issue no HTTP");
+        }
+        finally
+        {
+            search.TrySetCanceled();
+            await vm.ShutdownAsync();
+        }
+    }
+
     private sealed class AcceptedMetadataHandler(byte[] poster) : System.Net.Http.HttpMessageHandler
     {
         public int Calls { get; private set; }
@@ -354,8 +412,10 @@ internal static class ViewModelChecks
     private sealed class MetadataHandler(Task<System.Net.Http.HttpResponseMessage> response) : System.Net.Http.HttpMessageHandler
     {
         public bool Started { get; private set; }
+        public int Calls { get; private set; }
         protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken token)
         {
+            Calls++;
             Started = true;
             return response.WaitAsync(token);
         }

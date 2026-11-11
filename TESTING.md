@@ -226,7 +226,12 @@ theme, height, and expand/collapse bindings.
 - Missing, corrupt, invalid, or oversized JSON must not invalidate a cached
   poster. Metadata files are limited to 64 KiB and overview text to 4,000
   characters; writes use a temporary file and atomic move. A valid poster-only
-  legacy cache remains usable without inventing a plot or fetching one anew.
+  legacy cache remains usable. With online lookup enabled and a token available,
+  its poster is published before the normal conservative resolver backfills
+  missing/invalid metadata; accepted metadata binds to the existing poster bytes.
+  No poster redownload or manual cache clearing is needed. Ambiguous/rejected
+  candidates leave the poster intact with no plot or sidecar. Offline, token-free,
+  or disabled online lookup keeps cached artwork without attempting backfill.
 - Switch source/title or stop while metadata is pending: no old plot or expanded
   state may remain. Pause and seek must preserve the current plot.
 
@@ -243,7 +248,8 @@ For live validation, set a TMDB API Read Access Token in
 5. Moving the same optical title between drive letters does not split its poster
    cache identity.
 6. An ambiguous title-only query is refused instead of showing a guessed poster.
-7. Disable **Online posters** and confirm no TMDB artwork is shown or requested.
+7. Disable **Online posters** and confirm no HTTP lookup/backfill occurs; valid
+   cached artwork remains usable.
 8. Disable **Cache downloaded posters** and confirm live lookup still works but
    no new cache file is retained.
 9. Rapidly switch sources while a lookup is in flight; the existing media

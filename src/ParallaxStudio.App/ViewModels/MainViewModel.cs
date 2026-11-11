@@ -1872,7 +1872,22 @@ public sealed class MainViewModel : ObservableObject
                 _settings.CacheOnlineArtwork,
                 cancellationToken,
                 tmdbDuration,
-                message => _logger.InfoAsync(message));
+                message => _logger.InfoAsync(message),
+                async cached =>
+                {
+                    void ApplyCachedPoster()
+                    {
+                        if (!_shutdown && !cancellationToken.IsCancellationRequested &&
+                            generation == _mediaGeneration && artworkRequestId == _artworkRequestId &&
+                            string.Equals(source, _playback.Snapshot.Source, StringComparison.Ordinal))
+                            Artwork = artwork ?? cached.Poster;
+                    }
+                    var dispatcher = Application.Current?.Dispatcher;
+                    if (dispatcher is not null && !dispatcher.CheckAccess())
+                        await dispatcher.InvokeAsync(ApplyCachedPoster);
+                    else
+                        ApplyCachedPoster();
+                });
 
             artwork ??= tmdbResult?.Poster;
             var overview = tmdbResult?.Overview;
