@@ -927,7 +927,7 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekBackCommand}" ToolTip="{Binding SeekBackToolTip}" AutomationProperties.Name="{Binding SeekBackToolTip}" />
-                        <Button Content="{Binding PlayPauseGlyph}" Style="{StaticResource PrimaryButton}" Command="{Binding PlayPauseCommand}" Width="{DynamicResource StudioPlayButtonWidth}" Height="{DynamicResource StudioPlayButtonHeight}" Margin="8,0" FontFamily="Segoe Fluent Icons" FontSize="19" Padding="0" ToolTip="Play or pause (Space)" AutomationProperties.Name="{Binding PlayPauseText}" />
+                        <Button Content="{Binding PlayPauseGlyph}" Style="{StaticResource PlayTransportButton}" Command="{Binding PlayPauseCommand}" Margin="8,0" ToolTip="Play or pause (Space)" AutomationProperties.Name="{Binding PlayPauseText}" />
                         <Button Content="" Style="{StaticResource IconButton}" Command="{Binding SeekForwardCommand}" ToolTip="{Binding SeekForwardToolTip}" AutomationProperties.Name="{Binding SeekForwardToolTip}" />
                         <Button Content="" Style="{StaticResource IconButton}" Command="{Binding StopCommand}" ToolTip="Stop playback" AutomationProperties.Name="Stop playback" Margin="8,0,0,0" />
                     </StackPanel>
