@@ -30,7 +30,7 @@
             </Trigger>
             <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="FocusRing" Property="Opacity" Value="1" /></Trigger>
             <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonRoot" Property="Opacity" Value="0.8" /></Trigger>
-            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.38" /><Setter Property="Cursor" Value="Arrow" /></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.42" /><Setter Property="Cursor" Value="Arrow" /></Trigger>
         </ControlTemplate.Triggers>
     </ControlTemplate>
     <!-- Derived gradients live in each palette so theme changes replace whole frozen brushes. -->
@@ -196,6 +196,7 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
                             <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" />
                             <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="HoverWash" Storyboard.TargetProperty="Opacity" To="0.08" Duration="0:0:0.14" /></Storyboard></BeginStoryboard></Trigger.EnterActions>
                             <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="HoverWash" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18" /></Storyboard></BeginStoryboard></Trigger.ExitActions>
@@ -216,7 +217,7 @@
                                 <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.12" />
                             </Storyboard></BeginStoryboard></Trigger.ExitActions>
                         </Trigger>
-                        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.38" /><Setter Property="Cursor" Value="Arrow" /></Trigger>
+                        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.42" /><Setter Property="Cursor" Value="Arrow" /></Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
@@ -227,19 +228,114 @@
             </DataTrigger>
         </Style.Triggers>
     </Style>
+    <!-- Primary stays a dark, theme-aware surface; it reads as the primary action
+         through the accent-tinted border and slightly raised fill, never a bright slab. -->
     <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource CommandButton}">
-        <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
-        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" />
+        <!-- Own template strengthens border/wash on hover instead of the shared
+             CommandButton surface swap, which would be a no-op on this resting fill. -->
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid x:Name="ButtonRoot" RenderTransformOrigin="0.5,0.5">
+                        <Grid.RenderTransform><ScaleTransform /></Grid.RenderTransform>
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10" />
+                        <Border x:Name="HoverWash" Background="{DynamicResource TextBrush}" Opacity="0" CornerRadius="10" IsHitTestVisible="False" />
+                        <Border x:Name="FocusRing" BorderBrush="{TemplateBinding Foreground}" BorderThickness="1.5" CornerRadius="7" Margin="3" Opacity="0" IsHitTestVisible="False" />
+                        <ContentPresenter Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="HoverWash" Storyboard.TargetProperty="Opacity" To="0.1" Duration="0:0:0.14" /></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                            <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="HoverWash" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18" /></Storyboard></BeginStoryboard></Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.1" /></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                            <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" /></Storyboard></BeginStoryboard></Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Trigger.EnterActions><BeginStoryboard><Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="Opacity" To="0.8" Duration="0:0:0.06" />
+                                <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.97" Duration="0:0:0.06" />
+                                <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.97" Duration="0:0:0.06" />
+                            </Storyboard></BeginStoryboard></Trigger.EnterActions>
+                            <Trigger.ExitActions><BeginStoryboard><Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.12" />
+                                <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.12" />
+                                <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.12" />
+                            </Storyboard></BeginStoryboard></Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.42" /><Setter Property="Cursor" Value="Arrow" /></Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Play/Pause shares the exact transport surface in every state; the Play/Pause
+         glyph swap alone communicates playback state. Wider than the square icon buttons. -->
+    <Style x:Key="PlayTransportButton" TargetType="Button" BasedOn="{StaticResource CommandButton}">
+        <Setter Property="Width" Value="{DynamicResource StudioPlayButtonWidth}" />
+        <Setter Property="Height" Value="{DynamicResource StudioPlayButtonHeight}" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="FontFamily" Value="Segoe Fluent Icons" />
+        <Setter Property="FontSize" Value="19" />
     </Style>
     <Style x:Key="IconButton" TargetType="Button" BasedOn="{StaticResource CommandButton}">
         <Setter Property="Width" Value="{DynamicResource StudioIconButtonSize}" /><Setter Property="Height" Value="{DynamicResource StudioIconButtonSize}" /><Setter Property="MinHeight" Value="0" />
         <Setter Property="Padding" Value="0" /><Setter Property="FontFamily" Value="Segoe Fluent Icons" /><Setter Property="FontSize" Value="15" />
     </Style>
+    <!-- Caption buttons own their template so hover flows through the Background
+         property; that lets CloseCaptionButton turn Danger on hover instead of
+         being overridden by the shared template's SurfaceHover background. -->
     <Style x:Key="CaptionButton" TargetType="Button" BasedOn="{StaticResource CommandButton}">
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" /><Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" /><Setter Property="Width" Value="46" /><Setter Property="Height" Value="48" /><Setter Property="MinHeight" Value="0" />
-        <Setter Property="Padding" Value="0" /><Setter Property="FontFamily" Value="Segoe Fluent Icons" /><Setter Property="FontSize" Value="10" />
+        <Setter Property="Padding" Value="0" /><Setter Property="FontFamily" Value="Segoe Fluent Icons" /><Setter Property="FontSize" Value="12" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid x:Name="ButtonRoot" RenderTransformOrigin="0.5,0.5">
+                        <Grid.RenderTransform><ScaleTransform /></Grid.RenderTransform>
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10" />
+                        <Border x:Name="HoverWash" Background="{DynamicResource TextBrush}" Opacity="0" CornerRadius="10" IsHitTestVisible="False" />
+                        <Border x:Name="FocusRing" BorderBrush="{TemplateBinding Foreground}" BorderThickness="1.5" CornerRadius="7" Margin="3" Opacity="0" IsHitTestVisible="False" />
+                        <ContentPresenter Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentSecondaryBrush}" />
+                            <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="HoverWash" Storyboard.TargetProperty="Opacity" To="0.08" Duration="0:0:0.14" /></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                            <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="HoverWash" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18" /></Storyboard></BeginStoryboard></Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.1" /></Storyboard></BeginStoryboard></Trigger.EnterActions>
+                            <Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="FocusRing" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" /></Storyboard></BeginStoryboard></Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Trigger.EnterActions><BeginStoryboard><Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="Opacity" To="0.8" Duration="0:0:0.06" />
+                            </Storyboard></BeginStoryboard></Trigger.EnterActions>
+                            <Trigger.ExitActions><BeginStoryboard><Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="ButtonRoot" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.12" />
+                            </Storyboard></BeginStoryboard></Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.42" /><Setter Property="Cursor" Value="Arrow" /></Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource SurfaceHoverBrush}" /></Trigger>
+        </Style.Triggers>
     </Style>
     <Style x:Key="CloseCaptionButton" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
         <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource DangerBrush}" /><Setter Property="Foreground" Value="{DynamicResource WindowBrush}" /></Trigger></Style.Triggers>
